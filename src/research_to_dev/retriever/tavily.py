@@ -56,6 +56,7 @@ class TavilyRetriever:
                 "query": query,
                 "max_results": max_results,
                 "search_depth": self._search_depth,
+                "include_raw_content": True,
             }
             response = await self._client.post(
                 _TAVILY_API, json=payload, headers=headers

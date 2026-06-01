@@ -46,6 +46,47 @@ async def test_happy_path(tavily_data: dict) -> None:
     assert results[1].metadata.get("raw_content") is None
     assert results[1].metadata.get("score") == 0.87
 
+    # Third result has raw_content
+    assert results[2].metadata.get("raw_content") is not None
+    assert results[2].metadata.get("score") == 0.82
+
+
+@pytest.mark.asyncio
+async def test_include_raw_content_in_payload(tavily_data: dict) -> None:
+    """REQ-11: The POST payload MUST include include_raw_content: True."""
+    with respx.mock:
+        route = respx.post("https://api.tavily.com/search").mock(
+            return_value=httpx.Response(200, json=tavily_data)
+        )
+        retriever = TavilyRetriever(api_key="test-key")
+        await retriever.retrieve("deep learning", max_results=3)
+
+    # Assert the payload sent to the API includes the flag
+    assert route.calls.last is not None
+    body = json.loads(route.calls.last.request.content)
+    assert body.get("include_raw_content") is True, (
+        f"Expected include_raw_content=True in payload, got: {body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_raw_content_populated_in_metadata(tavily_data: dict) -> None:
+    """REQ-11: metadata[\"raw_content\"] is populated from Tavily response."""
+    with respx.mock:
+        respx.post("https://api.tavily.com/search").mock(
+            return_value=httpx.Response(200, json=tavily_data)
+        )
+        retriever = TavilyRetriever(api_key="test-key")
+        results = await retriever.retrieve("query")
+
+    # First result has raw_content
+    raw = results[0].metadata.get("raw_content")
+    assert raw is not None
+    assert "Deep learning has revolutionized" in raw
+
+    # Second result: no raw_content in fixture
+    assert results[1].metadata.get("raw_content") is None
+
 
 @pytest.mark.asyncio
 async def test_missing_api_key_returns_empty() -> None:
