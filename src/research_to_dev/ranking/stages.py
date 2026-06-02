@@ -90,6 +90,9 @@ async def semantic_rank(
         List of ``(paper, semantic_score)`` tuples, sorted descending
         by score, capped at ``top_k`` entries.
     """
+    if not papers or top_k <= 0:
+        return []
+
     try:
         abstracts = [p.abstract or "" for p in papers]
 
@@ -160,6 +163,9 @@ async def llm_judge(
         ``reasoning``. Sorted by ``relevance_score`` descending, capped
         at ``max_papers``.
     """
+    if not papers or max_papers <= 0:
+        return []
+
     paper_dicts = [
         {
             "paper_index": i,
@@ -177,7 +183,9 @@ async def llm_judge(
         valid = [
             r
             for r in results
-            if isinstance(r.get("relevance_score"), (int, float))
+            if isinstance(r.get("paper_index"), int)
+            and 0 <= r["paper_index"] < len(papers)
+            and isinstance(r.get("relevance_score"), (int, float))
             and 0.0 <= r["relevance_score"] <= 1.0
         ]
 

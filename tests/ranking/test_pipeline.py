@@ -221,8 +221,7 @@ class TestProtocolContracts:
         """RF-06: Object without judge() method fails LLMJudge check."""
         from research_to_dev.ranking.protocols import LLMJudge
 
-        incomplete = AsyncMock()
-        # No judge method on this mock
+        incomplete = object()
         assert not isinstance(incomplete, LLMJudge)
 
 

@@ -97,11 +97,13 @@ def mock_embedder() -> AsyncMock:
     """
     embedder = AsyncMock()
 
-    # Default: 3 papers → 3 vectors of size 3
+    # Default: 5 papers → 5 vectors of size 3
     embedder.embed.return_value = [
         [1.0, 0.0, 0.0],  # paper 0 — aligned with query
         [0.0, 1.0, 0.0],  # paper 1 — orthogonal
         [-1.0, 0.0, 0.0],  # paper 2 — opposite
+        [0.5, 0.5, 0.0],  # paper 3 — partially aligned
+        [0.0, 0.0, 1.0],  # paper 4 — different axis
     ]
 
     # Query vector aligned with x-axis
