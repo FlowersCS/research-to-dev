@@ -1,0 +1,24 @@
+{
+  "results": [
+    {
+      "title": "Applications of Deep Learning in Healthcare",
+      "url": "https://example.com/deep-learning-healthcare",
+      "content": "Deep learning has revolutionized healthcare diagnostics and treatment planning.",
+      "score": 0.95,
+      "raw_content": "<html><body><p>Deep learning has revolutionized healthcare diagnostics and treatment planning. Neural networks can now detect tumors with higher accuracy than human radiologists.</p></body></html>"
+    },
+    {
+      "title": "Machine Learning for Beginners",
+      "url": "https://example.com/ml-beginners",
+      "content": "An introduction to machine learning concepts.",
+      "score": 0.87
+    },
+    {
+      "title": "AI Ethics and Governance",
+      "url": "https://example.com/ai-ethics",
+      "content": "The importance of ethical considerations in AI development.",
+      "score": 0.82,
+      "raw_content": "<html><body><p>Ethical AI development requires transparency, fairness, and accountability.</p></body></html>"
+    }
+  ]
+}
