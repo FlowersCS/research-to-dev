@@ -232,6 +232,46 @@ class TestConcurrencyAndFailures:
         assert all(e.exception_type == "TimeoutException" for e in result.errors)
 
     @pytest.mark.asyncio
+    async def test_academic_failure_produces_degraded_academic_content(
+        self, arxiv_result: SearchResult, mock_scraper: AsyncMock
+    ) -> None:
+        """Academic extraction failure keeps degraded AcademicContent shape."""
+        retrieval = RetrievalResult(results=[arxiv_result], errors=[])
+
+        with patch(
+            "research_to_dev.extraction.pipeline.extract_academic_content",
+            side_effect=RuntimeError("boom"),
+        ):
+            pipeline = ExtractionPipeline(scraper=mock_scraper)
+            result = await pipeline.extract(retrieval)
+
+        assert len(result.contents) == 1
+        assert len(result.errors) == 1
+        content = result.contents[0]
+        assert isinstance(content, AcademicContent)
+        assert content.source == "arxiv"
+        assert content.title == "Quantum Paper"
+        assert content.abstract == "Quantum computing advances."
+
+    @pytest.mark.asyncio
+    async def test_non_exception_base_exception_is_reraised(
+        self, tavily_result: SearchResult, mock_scraper: AsyncMock
+    ) -> None:
+        """BaseException outcomes that are not Exception should be re-raised."""
+
+        class HardStop(BaseException):
+            pass
+
+        retrieval = RetrievalResult(results=[tavily_result], errors=[])
+        pipeline = ExtractionPipeline(scraper=mock_scraper)
+
+        with patch.object(
+            pipeline, "_extract_one", new=AsyncMock(side_effect=HardStop("stop"))
+        ):
+            with pytest.raises(HardStop):
+                await pipeline.extract(retrieval)
+
+    @pytest.mark.asyncio
     async def test_academic_extraction_never_fails(
         self, arxiv_result: SearchResult, mock_scraper: AsyncMock
     ) -> None:

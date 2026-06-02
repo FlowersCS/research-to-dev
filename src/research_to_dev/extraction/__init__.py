@@ -6,7 +6,7 @@ Public API
 - **Data**: ``AcademicContent``, ``GeneralContent``, ``ExtractionResult``, ``ExtractionError``
 - **Protocols**: ``Compressor``, ``Scraper`` — pluggable dependencies
 - **Stubs**: ``NoopCompressor`` — identity compression for MVP
-- **Scraper**: ``HttpxScraper`` — httpx + BeautifulSoup HTML fetching
+- **Scraper**: ``HttpxScraper`` — httpx-based HTML fetching
 """
 
 from research_to_dev.extraction.compressor import NoopCompressor

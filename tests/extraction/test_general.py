@@ -153,11 +153,11 @@ class TestScraperFallback:
         assert content.body == "Machine learning is cool."
 
     @pytest.mark.asyncio
-    async def test_scraper_failure_returns_empty_body(
+    async def test_scraper_timeout_propagates(
         self,
         tavily_result_no_raw: SearchResult,
     ) -> None:
-        """Scraper raises → body is empty string (REQ-07: fetch failure)."""
+        """Scraper timeout raises to caller."""
         scraper = AsyncMock()
         scraper.fetch.side_effect = httpx.TimeoutException("timed out")
 

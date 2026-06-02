@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from types import TracebackType
 
 import httpx
 
@@ -17,7 +18,8 @@ class HttpxScraper:
         logger: logging.Logger | None = None,
         timeout: float = 30.0,
     ) -> None:
-        self._client = client or httpx.AsyncClient(timeout=timeout)
+        self._owns_client = client is None
+        self._client = client if client is not None else httpx.AsyncClient(timeout=timeout)
         self._logger = logger or logging.getLogger(__name__)
         self._timeout = timeout
 
@@ -32,4 +34,19 @@ class HttpxScraper:
         response.raise_for_status()
         return response.text
 
+    async def aclose(self) -> None:
+        """Close the underlying client if this scraper created it."""
+        if self._owns_client:
+            await self._client.aclose()
+
+    async def __aenter__(self) -> HttpxScraper:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
