@@ -68,6 +68,8 @@ class ExtractionPipeline:
 
         for result, outcome in zip(retrieval.results, outcomes):
             if isinstance(outcome, BaseException):
+                if not isinstance(outcome, Exception):
+                    raise outcome
                 src = result.source
                 all_errors.append(
                     ExtractionError(
@@ -81,15 +83,7 @@ class ExtractionPipeline:
                     "Extraction failed for %r (%s): %s", result.title, src, outcome
                 )
                 # Still produce a degraded content so len(contents) == len(inputs).
-                all_contents.append(
-                    GeneralContent(
-                        source="tavily",  # type: ignore[arg-type]  # only tavily can fail
-                        title=result.title,
-                        url=result.url,
-                        body="",
-                        metadata=result.metadata or {},
-                    )
-                )
+                all_contents.append(self._degraded_content(result))
             else:
                 all_contents.append(outcome)
 
@@ -117,6 +111,26 @@ class ExtractionPipeline:
         if handler is None:
             raise ValueError(f"Unknown source: {result.source}")
         return await handler(result)
+
+    def _degraded_content(self, result: SearchResult) -> _ContentType:
+        """Return degraded typed content matching the source category."""
+        if result.source == "arxiv" or result.source == "semantic_scholar":
+            return AcademicContent(
+                source=result.source,
+                title=result.title,
+                url=result.url,
+                abstract=result.abstract,
+                authors=result.authors,
+                published_date=result.published_date,
+                metadata=result.metadata or {},
+            )
+        return GeneralContent(
+            source="tavily",
+            title=result.title,
+            url=result.url,
+            body="",
+            metadata=result.metadata or {},
+        )
 
     async def _compress_contents(
         self,

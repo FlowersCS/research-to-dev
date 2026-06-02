@@ -72,3 +72,35 @@ class TestHttpxScraperFetch:
                 await scraper.fetch("https://example.com/error")
 
 
+class TestHttpxScraperLifecycle:
+    """Verify client lifecycle behavior."""
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_owned_client(self) -> None:
+        scraper = HttpxScraper()
+        client = scraper._client
+
+        assert client.is_closed is False
+        await scraper.aclose()
+        assert client.is_closed is True
+
+    @pytest.mark.asyncio
+    async def test_aclose_does_not_close_injected_client(self) -> None:
+        client = httpx.AsyncClient()
+        scraper = HttpxScraper(client=client)
+
+        await scraper.aclose()
+        assert client.is_closed is False
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager_closes_owned_client(self) -> None:
+        scraper = HttpxScraper()
+        client = scraper._client
+
+        async with scraper as managed:
+            assert managed is scraper
+            assert client.is_closed is False
+
+        assert client.is_closed is True
+
