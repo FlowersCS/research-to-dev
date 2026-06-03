@@ -49,6 +49,24 @@ class RankingConfig:
 
 
 @dataclass
+class CorrelationMapConfig:
+    """Configuration for the CorrelationMap pipeline.
+
+    All values are constructor-injectable so tests can supply arbitrary
+    config without touching ``.env`` or global state.
+    """
+
+    similarity_threshold: float = 0.7
+    """Cosine similarity cutoff — pairs below this score are discarded (CM-CFG-01)."""
+
+    embedding_model: str = "text-embedding-3-small"
+    """OpenAI embedding model used for similarity computation (CM-CFG-01)."""
+
+    llm_model: str = "gpt-4o-mini"
+    """OpenAI chat model used for correlation classification (CM-CFG-01)."""
+
+
+@dataclass
 class CodebaseConfig:
     """Configuration for the Codebase Analysis pipeline.
 
@@ -69,9 +87,7 @@ class CodebaseConfig:
     )
     """Glob patterns for files to exclude from scanning."""
 
-    include_patterns: list[str] = field(
-        default_factory=lambda: ["*.py"]
-    )
+    include_patterns: list[str] = field(default_factory=lambda: ["*.py"])
     """Glob patterns for files to include in scanning."""
 
     max_components_per_module: int = 200
