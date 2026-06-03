@@ -7,6 +7,21 @@ from datetime import datetime
 
 
 @dataclass
+class ProfileConfig:
+    """Configuration for the Paper Profiling pipeline.
+
+    All values are constructor-injectable so tests can supply arbitrary
+    config without touching ``.env`` or global state.
+    """
+
+    model: str = "gpt-4o-mini"
+    """OpenAI chat model used for section and claim extraction."""
+
+    max_claims_per_paper: int = 20
+    """Maximum number of claims to keep per paper (caps output size)."""
+
+
+@dataclass
 class RankingConfig:
     """Configuration for the Ranking Funnel pipeline.
 
