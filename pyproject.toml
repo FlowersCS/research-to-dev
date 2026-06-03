@@ -29,5 +29,8 @@ dev = [
     "respx>=0.21.0",
 ]
 
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/research_to_dev"]
