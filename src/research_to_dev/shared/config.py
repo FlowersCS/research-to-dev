@@ -46,3 +46,36 @@ class RankingConfig:
 
     llm_model: str = "gpt-4o-mini"
     """OpenAI chat model used for relevance judgment."""
+
+
+@dataclass
+class CodebaseConfig:
+    """Configuration for the Codebase Analysis pipeline.
+
+    All values are constructor-injectable so tests can supply arbitrary
+    config without touching ``.env`` or global state.
+    """
+
+    include_private: bool = False
+    """Whether to include ``_``-prefixed functions and classes."""
+
+    exclude_patterns: list[str] = field(
+        default_factory=lambda: [
+            "test_*.py",
+            "*_test.py",
+            "setup.py",
+            "conftest.py",
+        ]
+    )
+    """Glob patterns for files to exclude from scanning."""
+
+    include_patterns: list[str] = field(
+        default_factory=lambda: ["*.py"]
+    )
+    """Glob patterns for files to include in scanning."""
+
+    max_components_per_module: int = 200
+    """Maximum number of components to extract from a single module."""
+
+    model: str = "gpt-4o-mini"
+    """OpenAI chat model used for component description and module summaries."""
