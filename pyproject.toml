@@ -16,7 +16,11 @@ dependencies = [
     "trafilatura>=2.0.0",
     "beautifulsoup4>=4.12.0",
     "lxml>=5.0.0",
+    "typer>=0.9.0",
 ]
+
+[project.scripts]
+research-to-dev = "research_to_dev.cli.main:app"
 
 [dependency-groups]
 dev = [
