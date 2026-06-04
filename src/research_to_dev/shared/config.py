@@ -56,7 +56,7 @@ class CorrelationMapConfig:
     config without touching ``.env`` or global state.
     """
 
-    similarity_threshold: float = 0.7
+    similarity_threshold: float = 0.4
     """Cosine similarity cutoff — pairs below this score are discarded (CM-CFG-01)."""
 
     embedding_model: str = "text-embedding-3-small"
@@ -64,6 +64,39 @@ class CorrelationMapConfig:
 
     llm_model: str = "gpt-4o-mini"
     """OpenAI chat model used for correlation classification (CM-CFG-01)."""
+
+
+@dataclass
+class HypothesisConfig:
+    """Configuration for the Hypothesis Generator pipeline.
+
+    All values are constructor-injectable so tests can supply arbitrary
+    config without touching ``.env`` or global state.
+    """
+
+    llm_model: str = "gpt-4o-mini"
+    """OpenAI chat model used for hypothesis generation and reflection."""
+
+    embedding_model: str = "text-embedding-3-small"
+    """OpenAI embedding model used for deduplication."""
+
+    max_reflection_rounds: int = 3
+    """Maximum number of reflection rounds before forced stop (AD-09)."""
+
+    dedup_threshold: float = 0.85
+    """Cosine similarity threshold for deduplication (AD-06, AD-09)."""
+
+    convergence_score_delta: float = 0.5
+    """Maximum average composite score change for convergence detection (AD-05, AD-09)."""
+
+    max_hypotheses_per_paper: int = 5
+    """Maximum hypotheses to keep per paper-cluster after generation (AD-09)."""
+
+    max_total_hypotheses: int = 30
+    """Hard cap on total hypotheses in the merged result (AD-09)."""
+
+    relevance_gate: int = 7
+    """Minimum relevance score (1-10) — hypotheses below this are filtered (AD-09)."""
 
 
 @dataclass
