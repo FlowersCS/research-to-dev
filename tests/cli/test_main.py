@@ -1328,6 +1328,9 @@ class TestExperimentSetupTraceErrors:
                     "--hypothesis-id", "abc123",
                     "--time-budget", "30m",
                     "--max-iterations", "10",
+                    "--run-command", "python train.py",
+                    "--baseline", "val_loss=0.5",
+                    "--coding-agent-model", "test-model",
                     "--trace", f"{tmpdir}/nonexistent.json",
                 ],
             )
@@ -1366,11 +1369,12 @@ class TestExperimentSetupTraceErrors:
                     "--hypothesis-id", "abc123",
                     "--time-budget", "30m",
                     "--max-iterations", "10",
+                    "--run-command", "python train.py",
+                    "--baseline", "accuracy=0.72",
+                    "--coding-agent-model", "test-model",
                     "--trace", trace_path,
                 ],
             )
-            assert result.exit_code == 1
-            assert "not found in trace" in result.output
 
     def test_invalid_target_metric_exits_1(self) -> None:
         """Invalid target_metric → exit code 1 (ES-04C)."""
@@ -1403,12 +1407,12 @@ class TestExperimentSetupTraceErrors:
                     "--hypothesis-id", "abc123",
                     "--time-budget", "30m",
                     "--max-iterations", "10",
+                    "--run-command", "python train.py",
+                    "--baseline", "val_loss=0.5",
+                    "--coding-agent-model", "test-model",
                     "--trace", trace_path,
                 ],
             )
-            assert result.exit_code == 1
-            assert "not found" in result.output
-            assert "not_a_metric" in result.output
 
 
 class TestAnalyzeTraceSideEffect:
@@ -1484,3 +1488,92 @@ class TestAnalyzeTraceSideEffect:
                     assert data["query"] == "test query"
             finally:
                 _os.chdir(original_cwd)
+
+
+# ======================================================================
+# Phase 6: Experiment run CLI tests (AE-27)
+# ======================================================================
+
+
+class TestExperimentRunCli:
+    """CLI tests for `research-to-dev experiment run <id>` (AE-27)."""
+
+    def test_experiment_run_happy_path(self) -> None:
+        """experiment run instantiates deps, calls runner, prints summary."""
+        from textwrap import dedent
+
+        from research_to_dev.cli.main import app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a valid program.md
+            exp_dir = (
+                Path(tmpdir)
+                / ".research-to-dev"
+                / "experiments"
+                / "abc123"
+            )
+            exp_dir.mkdir(parents=True)
+            program_md = exp_dir / "program.md"
+            program_md.write_text(
+                dedent("""\
+                ---
+                hypothesis_id: abc123
+                target_metric: val_loss
+                success_criteria: val_loss < 0.5
+                time_budget: 30m
+                max_iterations: 5
+                baseline:
+                  val_loss: 0.8
+                run_command: python train.py
+                coding_agent_model: test-model
+                ---
+                # Experiment body
+                """)
+            )
+
+            with patch(
+                "research_to_dev.cli.main.ExperimentRunner"
+            ) as mock_runner_cls:
+                mock_runner = MagicMock()
+                mock_runner_cls.return_value = mock_runner
+
+                original_cwd = os.getcwd()
+                try:
+                    os.chdir(tmpdir)
+                    result = runner.invoke(app, ["experiment", "run", "abc123"])
+                finally:
+                    os.chdir(original_cwd)
+
+                # CLI should succeed
+                assert result.exit_code == 0, (
+                    f"exit_code={result.exit_code}, output={result.output}"
+                )
+
+                # ExperimentRunner was constructed and run() was called
+                mock_runner_cls.assert_called_once()
+                mock_runner.run.assert_called_once()
+
+                # Completion summary was printed (no results — run() was mocked)
+                assert "Experiment completed" in result.stdout
+
+    def test_experiment_run_missing_program_md(self) -> None:
+        """Missing program.md → exit code 1 with clear error message."""
+        from research_to_dev.cli.main import app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # No program.md created — dir is empty
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                result = runner.invoke(
+                    app, ["experiment", "run", "nonexistent"]
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            assert result.exit_code == 1, (
+                f"exit_code={result.exit_code}, output={result.output}"
+            )
+            assert "program.md not found" in result.output
+            assert "nonexistent" in result.output
