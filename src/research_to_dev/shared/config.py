@@ -170,6 +170,27 @@ class RunConfig:
 
 
 @dataclass
+class ReportConfig:
+    """Configuration for the Results Compilation pipeline (D11).
+
+    All values are constructor-injectable so tests can supply arbitrary
+    config without touching the filesystem.
+    """
+
+    experiments_dir: str = ".research-to-dev/experiments"
+    """Directory containing per-hypothesis experiment subdirectories."""
+
+    reports_dir: str = ".research-to-dev/reports"
+    """Directory where compiled ``.md`` and ``.json`` reports are written."""
+
+    hypothesis_filter: str | None = None
+    """Optional hypothesis ID to filter compilation to a single hypothesis."""
+
+    include_insights: bool = False
+    """Whether to include LLM-generated insights (no-op placeholder for now)."""
+
+
+@dataclass
 class CodebaseConfig:
     """Configuration for the Codebase Analysis pipeline.
 
