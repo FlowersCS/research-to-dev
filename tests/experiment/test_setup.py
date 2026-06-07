@@ -66,7 +66,12 @@ class TestExperimentSetupValidation:
         config = _make_config(time_budget="not-a-duration")
 
         with pytest.raises(ValueError, match="Invalid time budget"):
-            setup.run(hypothesis, config, "accuracy")
+            setup.run(
+                hypothesis, config, "accuracy",
+                run_command="python train.py",
+                baseline={"accuracy": 0.72},
+                coding_agent_model="test-model",
+            )
 
     def test_zero_max_iterations_raises(self) -> None:
         """max_iterations = 0 raises ValueError."""
@@ -80,7 +85,12 @@ class TestExperimentSetupValidation:
         config = _make_config(max_iterations=0)
 
         with pytest.raises(ValueError, match="max_iterations must be >= 1"):
-            setup.run(hypothesis, config, "accuracy")
+            setup.run(
+                hypothesis, config, "accuracy",
+                run_command="python train.py",
+                baseline={"accuracy": 0.72},
+                coding_agent_model="test-model",
+            )
 
     def test_negative_max_iterations_raises(self) -> None:
         """Negative max_iterations raises ValueError."""
@@ -94,7 +104,12 @@ class TestExperimentSetupValidation:
         config = _make_config(max_iterations=-5)
 
         with pytest.raises(ValueError, match="max_iterations must be >= 1"):
-            setup.run(hypothesis, config, "accuracy")
+            setup.run(
+                hypothesis, config, "accuracy",
+                run_command="python train.py",
+                baseline={"accuracy": 0.72},
+                coding_agent_model="test-model",
+            )
 
     def test_unknown_metric_raises(self) -> None:
         """Unknown target_metric raises ValueError with actionable message."""
@@ -107,7 +122,12 @@ class TestExperimentSetupValidation:
         config = _make_config()
 
         with pytest.raises(ValueError, match="not found"):
-            setup.run(hypothesis, config, "not_a_metric")
+            setup.run(
+                hypothesis, config, "not_a_metric",
+                run_command="python train.py",
+                baseline={"accuracy": 0.72},
+                coding_agent_model="test-model",
+            )
 
 
 class TestExperimentSetupGitFailure:
@@ -129,7 +149,12 @@ class TestExperimentSetupGitFailure:
         config = _make_config()
 
         with pytest.raises(RuntimeError, match="uncommitted changes"):
-            setup.run(hypothesis, config, "accuracy")
+            setup.run(
+                hypothesis, config, "accuracy",
+                run_command="python train.py",
+                baseline={"accuracy": 0.72},
+                coding_agent_model="test-model",
+            )
 
     def test_not_a_git_repo_raises_runtime_error(self) -> None:
         """Not inside a git repo raises RuntimeError."""
@@ -145,7 +170,12 @@ class TestExperimentSetupGitFailure:
         config = _make_config()
 
         with pytest.raises(RuntimeError, match="Not a git repository"):
-            setup.run(hypothesis, config, "accuracy")
+            setup.run(
+                hypothesis, config, "accuracy",
+                run_command="python train.py",
+                baseline={"accuracy": 0.72},
+                coding_agent_model="test-model",
+            )
 
     def test_existing_branch_raises_runtime_error(self) -> None:
         """Existing experiment branch raises RuntimeError."""
@@ -162,7 +192,12 @@ class TestExperimentSetupGitFailure:
         config = _make_config()
 
         with pytest.raises(RuntimeError, match="already exists"):
-            setup.run(hypothesis, config, "accuracy")
+            setup.run(
+                hypothesis, config, "accuracy",
+                run_command="python train.py",
+                baseline={"accuracy": 0.72},
+                coding_agent_model="test-model",
+            )
 
 
 class TestExperimentSetupHappyPath:
@@ -183,7 +218,12 @@ class TestExperimentSetupHappyPath:
             hypothesis = _make_hypothesis(target_metric="val_loss")
             config = _make_config()
 
-            program_path = setup.run(hypothesis, config, "val_loss")
+            program_path = setup.run(
+            hypothesis, config, "val_loss",
+            run_command="python train.py --epochs 10",
+            baseline={"val_loss": 0.5},
+            coding_agent_model="opencode-go/deepseek-v4-pro",
+        )
 
             # Branch was created
             git_ops.create_branch.assert_called_once_with(
@@ -210,7 +250,12 @@ class TestExperimentSetupHappyPath:
             hypothesis = _make_hypothesis(target_metric="f1")
             config = _make_config()
 
-            program_path = setup.run(hypothesis, config, "f1")
+            program_path = setup.run(
+            hypothesis, config, "f1",
+            run_command="python train.py",
+            baseline={"f1": 0.8},
+            coding_agent_model="test-model",
+        )
             assert program_path.exists()
             content = program_path.read_text(encoding="utf-8")
             assert "target_metric: f1" in content
