@@ -100,6 +100,45 @@ class HypothesisConfig:
 
 
 @dataclass
+class MetricConfig:
+    """Configuration for a single metric pattern in the registry.
+
+    Constructor-injectable so tests can supply arbitrary metric configs
+    without touching ``.research-to-dev/config.yaml`` or global state.
+    """
+
+    name: str
+    """Metric identifier (e.g. ``val_loss``, ``accuracy``)."""
+
+    pattern: str
+    r"""Regex pattern for extraction (e.g. ``val_loss[:\s=]*([\d.]+)``)."""
+
+
+@dataclass
+class ExperimentConfig:
+    """Configuration for experiment setup.
+
+    All values are constructor-injectable so tests can supply arbitrary
+    config without touching CLI flags or filesystem state.
+    """
+
+    time_budget: str = ""
+    """Duration string e.g. ``"30m"``, ``"2h"``, ``"1h30m"`` — validated via regex at runtime."""
+
+    max_iterations: int = 0
+    """Positive integer — validated at runtime. Must be >= 1."""
+
+    trace_path: str = ".research-to-dev/pipeline/trace.json"
+    """Path to the PipelineTrace JSON file (default from D2)."""
+
+    config_path: str = ".research-to-dev/config.yaml"
+    """Path to the optional per-project metric config file."""
+
+    hypothesis_id: str = ""
+    """SHA-256 ID of the hypothesis to set up the experiment for."""
+
+
+@dataclass
 class CodebaseConfig:
     """Configuration for the Codebase Analysis pipeline.
 
