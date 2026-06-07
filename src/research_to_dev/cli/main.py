@@ -26,7 +26,7 @@ from research_to_dev.experiment.results import ResultsWriter
 from research_to_dev.experiment.runner import ExperimentRunner
 from research_to_dev.experiment.setup import ExperimentSetup
 from research_to_dev.experiment.trace import extract_hypotheses, read_trace
-from research_to_dev.shared.config import ExperimentConfig
+from research_to_dev.shared.config import ExperimentConfig, ReportConfig
 
 app = typer.Typer(
     name="research-to-dev",
@@ -475,6 +475,129 @@ def experiment_run(
 
 app.add_typer(config_app, name="config")
 app.add_typer(experiment_app, name="experiment")
+
+
+# ======================================================================
+# Report command (D1, D2, D3, RC-17 through RC-19)
+# ======================================================================
+
+
+@app.command(name="report")
+def report(
+    hypothesis: str | None = typer.Option(
+        None,
+        "--hypothesis",
+        help="Compile report for a specific hypothesis ID only.",
+    ),
+    with_insights: bool = typer.Option(
+        False,
+        "--with-insights",
+        help="Include LLM-generated insights (placeholder — no-op for now).",
+    ),
+) -> None:
+    """Compile experiment results into markdown and JSON reports.
+
+    Reads per-hypothesis ``results.tsv`` from
+    ``.research-to-dev/experiments/``, aggregates summaries, and writes
+    ``.md`` + ``.json`` reports to ``.research-to-dev/reports/``.
+
+    By default, all hypotheses are included.  Use ``--hypothesis <id>``
+    to filter to a single one.
+    """
+    from research_to_dev.report.compilation import (
+        TsvResultsReader,
+        compile_all,
+        compile_hypothesis,
+        write_reports,
+    )
+
+    config = ReportConfig(
+        hypothesis_filter=hypothesis,
+        include_insights=with_insights,
+    )
+
+    experiments_dir = Path(config.experiments_dir)
+    reports_dir = Path(config.reports_dir)
+
+    # -- 1. Validate experiments directory --------------------------------
+    if not experiments_dir.exists() or not experiments_dir.is_dir():
+        typer.echo(
+            f"Error: Experiments directory not found at {experiments_dir}. "
+            f"Run `research-to-dev experiment setup ...` first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # -- 2. Build reader --------------------------------------------------
+    reader = TsvResultsReader(experiments_dir)
+
+    # -- 3. Compile (all or single) ---------------------------------------
+    if config.hypothesis_filter:
+        # Single hypothesis mode
+        hyp_dir = experiments_dir / config.hypothesis_filter
+        if not hyp_dir.is_dir():
+            typer.echo(
+                f"Error: Hypothesis directory not found: {hyp_dir}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        try:
+            iterations = reader.read(config.hypothesis_filter)
+        except FileNotFoundError:
+            typer.echo(
+                f"Error: results.tsv not found for hypothesis "
+                f"'{config.hypothesis_filter}'.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if not iterations:
+            typer.echo(
+                f"Warning: Empty results for hypothesis "
+                f"'{config.hypothesis_filter}' (no iterations).",
+                err=True,
+            )
+
+        # Discover direction from program.md
+        direction = "maximize"
+        program_md_path = hyp_dir / "program.md"
+        if program_md_path.exists():
+            try:
+                from research_to_dev.experiment.program_reader import parse_program_md
+
+                spec = parse_program_md(program_md_path)
+                direction = spec.direction
+            except (ValueError, FileNotFoundError):
+                pass
+
+        summary = compile_hypothesis(
+            config.hypothesis_filter, iterations, direction
+        )
+        from datetime import datetime, timezone
+        from research_to_dev.report.compilation import CompiledReport
+
+        compiled = CompiledReport(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            hypotheses=[summary],
+        )
+    else:
+        # All hypotheses mode
+        compiled = compile_all(reader, experiments_dir)
+
+        if not compiled.hypotheses:
+            typer.echo(
+                "Error: No hypothesis results found. "
+                "No results.tsv files discovered in any experiment subdirectory.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    # -- 4. Write reports -------------------------------------------------
+    md_path, json_path = write_reports(compiled, reports_dir)
+
+    typer.echo(f"Report written to {md_path}")
+    typer.echo(f"Report written to {json_path}")
 
 
 # ======================================================================
