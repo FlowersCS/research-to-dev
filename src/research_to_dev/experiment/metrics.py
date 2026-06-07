@@ -1,4 +1,6 @@
-"""Metric registry with built-in defaults and optional config.yaml override.
+"""Metric registry with built-in defaults, optional config.yaml override,
+and keep/discard decision logic for the experiment runner.
+
 
 Follows D5 and D12: built-in metric patterns for common ML metrics (val_loss,
 accuracy, loss, f1, bleu, perplexity).  Per-project overrides via
@@ -99,6 +101,40 @@ class MetricRegistry:
         """
         return sorted(self._patterns.keys())
 
+    def extract(self, text: str, metric_name: str) -> float | None:
+        """Extract a metric value from *text* using the registered pattern.
+
+        Applies ``re.search`` with the metric's regex pattern and returns
+        the first captured group as ``float``.  If the pattern has no
+        capture group, the full match text is used instead.
+
+        Args:
+            text: The text to search (e.g. stdout from a run command).
+            metric_name: The metric identifier (e.g. ``"accuracy"``).
+
+        Returns:
+            The extracted float value, or ``None`` if no match is found.
+
+        Raises:
+            ValueError: If *metric_name* is not registered.
+        """
+        if not self.validate_metric(metric_name):
+            raise ValueError(
+                f"Unknown metric '{metric_name}'. "
+                f"Register it in config.yaml or use one of: "
+                f"{', '.join(self.list_all())}"
+            )
+
+        pattern = self._patterns[metric_name]
+        match = re.search(pattern, text)
+        if not match:
+            return None
+
+        # Prefer the first capture group; fall back to full match text.
+        if match.groups():
+            return float(match.group(1))
+        return float(match.group(0))
+
     # -- helpers -----------------------------------------------------------
 
     def to_configs(self) -> list[MetricConfig]:
@@ -107,3 +143,43 @@ class MetricRegistry:
             MetricConfig(name=name, pattern=pat)
             for name, pat in sorted(self._patterns.items())
         ]
+
+
+# ------------------------------------------------------------------
+
+
+def decide_keep(
+    current_value: float,
+    baseline_value: float,
+    direction: str,
+) -> bool:
+    """Decide whether to keep or discard the current experiment iteration.
+
+    Comparison uses the *direction* inferred from ``success_criteria``
+    (D6) to determine what counts as an improvement:
+
+    * ``"maximize"`` — keep when ``current_value >= baseline_value``
+    * ``"minimize"`` — keep when ``current_value <= baseline_value``
+
+    Equal values are treated as "keep" so the loop does not discard
+    progress it cannot yet beat.
+
+    Args:
+        current_value: Extracted metric value from the current iteration.
+        baseline_value: The current baseline (may be updated after keep).
+        direction: Either ``"maximize"`` or ``"minimize"``.
+
+    Returns:
+        ``True`` if the iteration should be kept, ``False`` otherwise.
+
+    Raises:
+        ValueError: If *direction* is not ``"maximize"`` or ``"minimize"``.
+    """
+    if direction == "maximize":
+        return current_value >= baseline_value
+    if direction == "minimize":
+        return current_value <= baseline_value
+    raise ValueError(
+        f"Invalid direction '{direction}'. "
+        f"Must be 'maximize' or 'minimize'."
+    )
