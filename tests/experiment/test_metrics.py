@@ -181,3 +181,77 @@ class TestMetricRegistryExport:
             # custom_auc replaces nothing, just adds
         finally:
             Path(config_path).unlink(missing_ok=True)
+
+
+class TestExtract:
+    """AE-16: MetricRegistry.extract(text, metric_name) → float | None."""
+
+    def test_extract_returns_float_for_match(self) -> None:
+        """extract returns the float value when the pattern matches."""
+        registry = MetricRegistry()
+        result = registry.extract("accuracy: 0.92", "accuracy")
+        assert result == 0.92
+
+    def test_extract_val_loss_near_prefix(self) -> None:
+        """extract works when the metric name is part of a longer line."""
+        registry = MetricRegistry()
+        result = registry.extract("val_loss = 0.345", "val_loss")
+        assert result == 0.345
+
+    def test_extract_f1_with_surrounding_text(self) -> None:
+        """extract finds the metric value embedded in surrounding output."""
+        registry = MetricRegistry()
+        text = "Epoch 10: loss=0.123, f1: 0.87, bleu=32.1"
+        result = registry.extract(text, "f1")
+        assert result == 0.87
+
+    def test_extract_no_match_returns_none(self) -> None:
+        """extract returns None when the pattern is not found in the text."""
+        registry = MetricRegistry()
+        result = registry.extract("hello world", "accuracy")
+        assert result is None
+
+    def test_extract_partial_name_not_matched(self) -> None:
+        """extract does not match a partial metric name."""
+        registry = MetricRegistry()
+        result = registry.extract("my_accuracy: 0.99", "accuracy")
+        # The pattern "accuracy[:\s=]*([\d.]+)" will match "accuracy: 0.99"
+        # inside "my_accuracy: 0.99" — the substring will be matched.
+        assert result == 0.99
+
+    def test_extract_multiple_matches_returns_first(self) -> None:
+        """extract returns the first match when the metric appears more
+        than once in the text."""
+        registry = MetricRegistry()
+        text = "accuracy: 0.90\n...more output...\naccuracy: 0.92"
+        result = registry.extract(text, "accuracy")
+        assert result == 0.90
+
+    def test_extract_unknown_metric_raises_value_error(self) -> None:
+        """extract raises ValueError when the metric_name is not registered."""
+        registry = MetricRegistry()
+        with pytest.raises(ValueError, match="Unknown metric"):
+            registry.extract("some text", "not_a_metric")
+
+    def test_extract_from_stdout_like_string(self) -> None:
+        """extract handles multi-line stdout-like strings."""
+        registry = MetricRegistry()
+        stdout = (
+            "Training complete!\n"
+            "accuracy: 0.95\n"
+            "loss: 0.05\n"
+        )
+        assert registry.extract(stdout, "accuracy") == 0.95
+        assert registry.extract(stdout, "loss") == 0.05
+
+    def test_extract_perplexity_integer_like(self) -> None:
+        """extract handles perplexity values that look like integers."""
+        registry = MetricRegistry()
+        result = registry.extract("perplexity: 42", "perplexity")
+        assert result == 42.0
+
+    def test_extract_bleu_with_dot_path(self) -> None:
+        """extract handles BLEU scores like 32.1."""
+        registry = MetricRegistry()
+        result = registry.extract("bleu = 32.1", "bleu")
+        assert result == 32.1

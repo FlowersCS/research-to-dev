@@ -36,6 +36,11 @@ class ProgramWriter:
         hypothesis: Hypothesis,
         config: ExperimentConfig,
         target_metric: str,
+        *,
+        run_command: str,
+        baseline: dict[str, float],
+        coding_agent_model: str,
+        direction: str | None = None,
     ) -> Path:
         """Generate and write ``program.md`` for a hypothesis.
 
@@ -43,14 +48,37 @@ class ProgramWriter:
             hypothesis: The hypothesis to create the experiment for.
             config: Experiment configuration (time budget, max iterations).
             target_metric: The validated target metric name.
+            run_command: Shell command to execute (D3).  Must not be empty.
+            baseline: Baseline metric values as a dict (D4).
+                Must not be empty.
+            coding_agent_model: Model identifier for the coding agent (D12).
+                Must not be empty.
+            direction: Optional explicit direction override (D6).
+                If ``None``, omitted from frontmatter — ``program_reader``
+                will infer it from ``success_criteria``.
 
         Returns:
             Path to the created ``program.md`` file.
+
+        Raises:
+            ValueError: If any required parameter is empty or invalid.
         """
+        # Fail loud for mandatory fields (T3)
+        if not run_command.strip():
+            raise ValueError("run_command must not be empty (D3).")
+        if not baseline:
+            raise ValueError("baseline must not be empty (D4).")
+        if not coding_agent_model.strip():
+            raise ValueError("coding_agent_model must not be empty (D12).")
+
         output_dir = self._base / hypothesis.id
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        content = self._render(hypothesis, config, target_metric)
+        content = self._render(
+            hypothesis, config, target_metric,
+            run_command=run_command, baseline=baseline,
+            coding_agent_model=coding_agent_model, direction=direction,
+        )
         file_path = output_dir / "program.md"
         file_path.write_text(content, encoding="utf-8")
         return file_path
@@ -64,6 +92,11 @@ class ProgramWriter:
         hypothesis: Hypothesis,
         config: ExperimentConfig,
         target_metric: str,
+        *,
+        run_command: str,
+        baseline: dict[str, float],
+        coding_agent_model: str,
+        direction: str | None = None,
     ) -> str:
         """Render the full program.md content.
 
@@ -76,7 +109,14 @@ class ProgramWriter:
             "success_criteria": hypothesis.success_criteria,
             "time_budget": config.time_budget,
             "max_iterations": config.max_iterations,
+            "run_command": run_command,
+            "baseline": baseline,
+            "coding_agent_model": coding_agent_model,
         }
+        # direction is optional — omitted if not explicitly provided (D6)
+        # program_reader will infer it from success_criteria operators
+        if direction is not None:
+            frontmatter["direction"] = direction
 
         # --- Objective prose ---
         papers = hypothesis.supporting_papers or []

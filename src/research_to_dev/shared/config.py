@@ -139,6 +139,37 @@ class ExperimentConfig:
 
 
 @dataclass
+class RunConfig:
+    """Internal representation of experiment run configuration.
+
+    Mirrors what ``program_reader`` produces from ``program.md`` frontmatter.
+    This is for internal representation, NOT for CLI flags (D11 — single
+    source of truth is program.md).
+
+    All values are constructor-injectable so tests can supply arbitrary
+    config without touching the filesystem.
+    """
+
+    agent_model: str
+    """Model identifier for the coding agent (e.g. ``"opencode-go/deepseek-v4-pro"``)."""
+
+    time_budget_seconds: int
+    """Total time budget in seconds (parsed from ``time_budget`` string)."""
+
+    max_iterations: int
+    """Maximum number of agent-code-execute iterations (must be >= 1)."""
+
+    baseline: dict[str, float]
+    """Baseline metric values (e.g. ``{"val_accuracy": 0.72}``)."""
+
+    run_command: str
+    """Shell command to execute (e.g. ``"python train.py"``)."""
+
+    direction: str = "maximize"
+    """Direction for improvement comparison: ``"maximize"`` or ``"minimize"``."""
+
+
+@dataclass
 class CodebaseConfig:
     """Configuration for the Codebase Analysis pipeline.
 

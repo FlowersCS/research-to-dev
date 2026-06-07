@@ -16,9 +16,14 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from research_to_dev.cli.orchestrator import PipelineOrchestrator, PipelineTrace
+from research_to_dev.experiment.agent import OpenCodeAdapter
+from research_to_dev.experiment.executor import CodeExecutor
 from research_to_dev.experiment.git import GitOperations
 from research_to_dev.experiment.metrics import MetricRegistry
 from research_to_dev.experiment.program import ProgramWriter
+from research_to_dev.experiment.program_reader import parse_program_md
+from research_to_dev.experiment.results import ResultsWriter
+from research_to_dev.experiment.runner import ExperimentRunner
 from research_to_dev.experiment.setup import ExperimentSetup
 from research_to_dev.experiment.trace import extract_hypotheses, read_trace
 from research_to_dev.shared.config import ExperimentConfig
@@ -243,6 +248,27 @@ def experiment_setup(
         "--max-iterations",
         help="Maximum number of improvement iterations (>= 1).",
     ),
+    run_command: str = typer.Option(
+        ...,
+        "--run-command",
+        help="Shell command to execute (e.g. 'python train.py').",
+    ),
+    baseline: str = typer.Option(
+        ...,
+        "--baseline",
+        help="Baseline metric as key=value (e.g. 'val_accuracy=0.72').",
+    ),
+    coding_agent_model: str = typer.Option(
+        ...,
+        "--coding-agent-model",
+        help="Model identifier for the coding agent (e.g. 'opencode-go/deepseek-v4-pro').",
+    ),
+    direction: str | None = typer.Option(
+        None,
+        "--direction",
+        help="Explicit direction override: 'maximize' or 'minimize'. "
+             "If not set, inferred from success_criteria.",
+    ),
     trace: str = typer.Option(
         ".research-to-dev/pipeline/trace.json",
         "--trace",
@@ -311,7 +337,38 @@ def experiment_setup(
         )
         raise typer.Exit(code=1)
 
-    # -- 3. Build config and run setup ----------------------------------
+    # -- 3. Parse baseline from key=value format ------------------------
+    if "=" not in baseline:
+        typer.echo(
+            f"Error: baseline must be in key=value format "
+            f"(e.g. 'val_accuracy=0.72'), got '{baseline}'.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    key, _, val_str = baseline.partition("=")
+    key = key.strip()
+    val_str = val_str.strip()
+
+    if not key or not val_str:
+        typer.echo(
+            f"Error: baseline must be in key=value format "
+            f"(e.g. 'val_accuracy=0.72'), got '{baseline}'.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        baseline_dict: dict[str, float] = {key: float(val_str)}
+    except ValueError:
+        typer.echo(
+            f"Error: baseline value must be numeric (e.g. '0.72'), "
+            f"got '{val_str}'.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # -- 4. Build config and run setup ----------------------------------
     config = ExperimentConfig(
         time_budget=time_budget,
         max_iterations=max_iterations,
@@ -325,13 +382,93 @@ def experiment_setup(
     setup = ExperimentSetup(git_ops=git_ops, writer=writer, metrics=metrics)
 
     try:
-        program_path = setup.run(target, config, target_metric)
+        program_path = setup.run(
+            target,
+            config,
+            target_metric,
+            run_command=run_command,
+            baseline=baseline_dict,
+            coding_agent_model=coding_agent_model,
+            direction=direction,
+        )
     except (ValueError, RuntimeError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1)
 
     typer.echo(f"Experiment branch created: experiment/{hypothesis_id}")
     typer.echo(f"Program.md generated: {program_path}")
+
+
+@experiment_app.command(name="run")
+def experiment_run(
+    hypothesis_id: str = typer.Argument(
+        ...,
+        help="SHA-256 ID of the hypothesis to experiment on.",
+    ),
+) -> None:
+    """Run the experiment iteration loop for a hypothesis.
+
+    Reads program.md from .research-to-dev/experiments/<hypothesis-id>/,
+    instantiates the full dependency chain, and executes the agentic
+    iteration loop until the time budget or max iterations is reached.
+
+    All configuration (time budget, max iterations, metric direction, etc.)
+    comes from program.md — there are no CLI overrides (D11).
+    """
+    # -- 1. Resolve and validate program.md path -------------------------
+    program_md_path = Path(
+        f".research-to-dev/experiments/{hypothesis_id}/program.md"
+    ).resolve()
+
+    if not program_md_path.exists():
+        typer.echo(
+            f"Error: program.md not found at {program_md_path}.\n"
+            f"Run 'research-to-dev experiment setup --hypothesis-id "
+            f"{hypothesis_id} ...' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # -- 2. Parse program.md (AE-25 step 2) ------------------------------
+    try:
+        program_spec = parse_program_md(program_md_path)
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # -- 3. Load config.yaml (optional, AE-25 step 3) --------------------
+    config_yaml_path = ".research-to-dev/config.yaml"
+    registry = MetricRegistry(
+        config_path=config_yaml_path if Path(config_yaml_path).exists() else None
+    )
+
+    # -- 4-9. Build dependency chain (AE-25 steps 4-9) -------------------
+    git_ops = GitOperations(repo_path=".")
+    adapter = OpenCodeAdapter()
+    executor = CodeExecutor(cwd=".")
+    results_path = Path(
+        f".research-to-dev/experiments/{hypothesis_id}/results.tsv"
+    )
+    writer = ResultsWriter(tsv_path=results_path)
+
+    runner_obj = ExperimentRunner(
+        agent=adapter,
+        executor=executor,
+        git_ops=git_ops,
+        metric_registry=registry,
+        results_writer=writer,
+        program_spec=program_spec,
+    )
+
+    # -- 10. Run the experiment loop (AE-25 step 10) ---------------------
+    try:
+        runner_obj.run(program_md_path)
+    except (RuntimeError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # -- 11. Print completion summary (AE-26) ----------------------------
+    _print_run_summary(results_path, program_spec)
 
 
 # -- Register sub-apps on the main app ------------------------------------
@@ -348,6 +485,110 @@ app.add_typer(experiment_app, name="experiment")
 def _truncate(text: str, max_len: int = 50) -> str:
     """Truncate text with ellipsis if longer than max_len."""
     return text if len(text) <= max_len else text[: max_len - 3] + "..."
+
+
+def _print_run_summary(
+    results_path: Path, program_spec: object
+) -> None:
+    """Print a completion summary after the experiment loop finishes (AE-26).
+
+    Reads the results TSV to compute iterations run, keeps/discards, and
+    the final baseline value.  If no results were written (e.g. zero
+    iterations) a "No iterations" message is shown instead.
+    """
+    from research_to_dev.experiment.program_reader import ProgramSpec
+
+    assert isinstance(program_spec, ProgramSpec)
+
+    direction = program_spec.direction
+    metric_name = program_spec.target_metric
+
+    # ----- read TSV rows ------------------------------------------------
+    if not results_path.exists():
+        typer.echo("\nExperiment completed. No iterations ran (results file not found).")
+        return
+
+    raw = results_path.read_text(encoding="utf-8")
+    lines = raw.strip().split("\n")
+
+    if len(lines) <= 1:
+        # Header only, no data rows
+        typer.echo("\nExperiment completed. No iterations ran.")
+        return
+
+    # Skip header (line 0)
+    rows: list[dict] = []
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) >= 6:
+            rows.append({
+                "iteration": int(parts[0]),
+                "metric_name": parts[1],
+                "metric_value": float(parts[2]),
+                "baseline_value": float(parts[3]),
+                "delta": float(parts[4]),
+                "status": parts[5],
+            })
+
+    if not rows:
+        typer.echo("\nExperiment completed. No data rows in results file.")
+        return
+
+    # ----- compute keeps / discards -------------------------------------
+    kept = 0
+    discarded = 0
+    failed = 0
+    timeout_count = 0
+
+    for row in rows:
+        status = row["status"]
+        if status == "timeout":
+            timeout_count += 1
+            discarded += 1  # timeouts are treated as discards
+        elif status == "failed":
+            failed += 1
+            discarded += 1  # failed iterations are also discards
+        else:
+            # status == "success": use delta to infer keep/discard
+            delta = row["delta"]
+            if direction == "maximize":
+                if delta >= 0:
+                    kept += 1
+                else:
+                    discarded += 1
+            else:  # minimize
+                if delta <= 0:
+                    kept += 1
+                else:
+                    discarded += 1
+
+    # ----- final baseline -----------------------------------------------
+    # The baseline in the TSV row is the *pre-iteration* baseline.
+    # If the last iteration was a keep, the new baseline is the row's
+    # metric_value; otherwise it's the row's baseline_value.
+    last = rows[-1]
+    last_delta = last["delta"]
+    if direction == "maximize" and last_delta >= 0:
+        final_baseline = last["metric_value"]
+    elif direction == "minimize" and last_delta <= 0:
+        final_baseline = last["metric_value"]
+    else:
+        final_baseline = last["baseline_value"]
+
+    # ----- print --------------------------------------------------------
+    typer.echo()
+    typer.echo("═══════════════════════════════════════")
+    typer.echo(" EXPERIMENT COMPLETED")
+    typer.echo("═══════════════════════════════════════")
+    typer.echo(f"  Iterations:     {len(rows)}")
+    typer.echo(f"  Kept:           {kept} (improvements committed)")
+    typer.echo(f"  Discarded:      {discarded} (failed/timeout/worse)")
+    if failed:
+        typer.echo(f"    └─ failed:    {failed}")
+    if timeout_count:
+        typer.echo(f"    └─ timeout:   {timeout_count}")
+    typer.echo(f"  Final baseline: {metric_name}={final_baseline}")
+    typer.echo("═══════════════════════════════════════")
 
 
 def _print_summary(

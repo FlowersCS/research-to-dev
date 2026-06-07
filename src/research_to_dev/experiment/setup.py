@@ -52,6 +52,11 @@ class ExperimentSetup:
         hypothesis: Hypothesis,
         config: ExperimentConfig,
         target_metric: str,
+        *,
+        run_command: str,
+        baseline: dict[str, float],
+        coding_agent_model: str,
+        direction: str | None = None,
     ) -> Path:
         """Run the full experiment setup flow.
 
@@ -59,19 +64,39 @@ class ExperimentSetup:
             hypothesis: The hypothesis to experiment on.
             config: Experiment configuration (time budget, max iterations).
             target_metric: The validated metric name (already resolved).
+            run_command: Shell command to execute (D3).  Must not be empty.
+            baseline: Baseline metric values as a dict (D4).
+                Must not be empty.
+            coding_agent_model: Model identifier for the coding agent (D12).
+                Must not be empty.
+            direction: Optional explicit direction override (D6).
+                If ``None``, omitted from frontmatter — ``program_reader``
+                will infer it from ``success_criteria``.
 
         Returns:
             Path to the created ``program.md`` file.
 
         Raises:
             ValueError: If input validation fails (invalid time budget,
-                zero/negative max iterations, unknown metric, etc.).
+                zero/negative max iterations, unknown metric, empty
+                run_command/baseline/coding_agent_model, etc.).
             RuntimeError: If git operations fail (dirty repo, existing
                 branch, not a repo).
         """
         # -- 0. Validate inputs --------------------------------------------
         self._validate_time_budget(config.time_budget)
         self._validate_max_iterations(config.max_iterations)
+
+        if not run_command.strip():
+            raise ValueError("run_command must not be empty (D3).")
+        if not baseline:
+            raise ValueError("baseline must be a non-empty dict (D4).")
+        if not coding_agent_model.strip():
+            raise ValueError("coding_agent_model must not be empty (D12).")
+        if direction is not None and direction not in ("maximize", "minimize"):
+            raise ValueError(
+                f"direction must be 'maximize' or 'minimize', got '{direction}'."
+            )
 
         if not self._metrics.validate_metric(target_metric):
             builtins = ", ".join(self._metrics.list_all())
@@ -106,7 +131,15 @@ class ExperimentSetup:
         self._git.create_branch(branch_name)
 
         # -- 3. Generate program.md -----------------------------------------
-        return self._writer.write(hypothesis, config, target_metric)
+        return self._writer.write(
+            hypothesis,
+            config,
+            target_metric,
+            run_command=run_command,
+            baseline=baseline,
+            coding_agent_model=coding_agent_model,
+            direction=direction,
+        )
 
     # ------------------------------------------------------------------
     # Validation helpers
