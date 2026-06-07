@@ -1188,3 +1188,299 @@ class TestPipelineOrchestratorCallback:
         assert len(trace.steps) == 7
         for step_trace in trace.steps.values():
             assert step_trace.status == "success"
+
+
+# ======================================================================
+# Phase 4.6: Config init CLI tests (ES-02)
+# ======================================================================
+
+
+class TestConfigInitCli:
+    """CLI tests for `research-to-dev config init`."""
+
+    def test_config_init_help(self) -> None:
+        """config init --help shows the command documentation."""
+        from research_to_dev.cli.main import app
+
+        result = runner.invoke(app, ["config", "init", "--help"])
+        assert result.exit_code == 0
+        assert "config.yaml" in result.stdout
+
+    def test_config_init_creates_file(self) -> None:
+        """config init creates .research-to-dev/config.yaml."""
+        from research_to_dev.cli.main import app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = f"{tmpdir}/config.yaml"
+            result = runner.invoke(
+                app, ["config", "init", "--path", config_path]
+            )
+            assert result.exit_code == 0
+            assert Path(config_path).exists()
+            content = Path(config_path).read_text()
+            assert "metrics:" in content
+            assert "val_loss" in content
+            assert "accuracy" in content
+            assert "custom_auc" in content  # example comment
+
+    def test_config_init_idempotent(self) -> None:
+        """config init fails if config.yaml already exists (ES-02B)."""
+        from research_to_dev.cli.main import app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = f"{tmpdir}/config.yaml"
+            # First run succeeds
+            result1 = runner.invoke(
+                app, ["config", "init", "--path", config_path]
+            )
+            assert result1.exit_code == 0
+
+            # Second run fails
+            result2 = runner.invoke(
+                app, ["config", "init", "--path", config_path]
+            )
+            assert result2.exit_code == 1
+            assert "already exists" in result2.output
+
+
+# ======================================================================
+# Phase 4.6: Experiment setup CLI tests (ES-04)
+# ======================================================================
+
+
+class TestExperimentSetupCliHelp:
+    """CLI tests for `research-to-dev experiment setup --help`."""
+
+    def test_experiment_setup_help_shows_flags(self) -> None:
+        """experiment setup --help shows mandatory flags."""
+        from research_to_dev.cli.main import app
+
+        result = runner.invoke(app, ["experiment", "setup", "--help"])
+        assert result.exit_code == 0
+        assert "--hypothesis-id" in result.stdout
+        assert "--time-budget" in result.stdout
+        assert "--max-iterations" in result.stdout
+        assert "--trace" in result.stdout
+        assert "--config" in result.stdout
+
+
+class TestExperimentSetupFlagValidation:
+    """CLI flag validation for experiment setup."""
+
+    def test_missing_time_budget_exits_2(self) -> None:
+        """Missing --time-budget → exit code 2 (ES-04B)."""
+        from research_to_dev.cli.main import app
+
+        result = runner.invoke(
+            app,
+            [
+                "experiment", "setup",
+                "--hypothesis-id", "abc123",
+                "--max-iterations", "10",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "time-budget" in result.output
+
+    def test_missing_max_iterations_exits_2(self) -> None:
+        """Missing --max-iterations → exit code 2."""
+        from research_to_dev.cli.main import app
+
+        result = runner.invoke(
+            app,
+            [
+                "experiment", "setup",
+                "--hypothesis-id", "abc123",
+                "--time-budget", "30m",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "max-iterations" in result.output
+
+    def test_missing_hypothesis_id_exits_2(self) -> None:
+        """Missing --hypothesis-id → exit code 2."""
+        from research_to_dev.cli.main import app
+
+        result = runner.invoke(
+            app,
+            [
+                "experiment", "setup",
+                "--time-budget", "30m",
+                "--max-iterations", "10",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "hypothesis-id" in result.output
+
+
+class TestExperimentSetupTraceErrors:
+    """Trace-related error scenarios for experiment setup."""
+
+    def test_trace_file_missing_exits_1(self) -> None:
+        """Missing trace file → exit code 1 with actionable message (ES-04H)."""
+        from research_to_dev.cli.main import app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                [
+                    "experiment", "setup",
+                    "--hypothesis-id", "abc123",
+                    "--time-budget", "30m",
+                    "--max-iterations", "10",
+                    "--trace", f"{tmpdir}/nonexistent.json",
+                ],
+            )
+            assert result.exit_code == 1
+            assert "Trace not found" in result.output
+
+    def test_hypothesis_id_not_in_trace_exits_1(self) -> None:
+        """Hypothesis ID not found in trace → exit code 1 (ES-04F)."""
+        from research_to_dev.cli.main import app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a trace with a different hypothesis
+            trace_path = f"{tmpdir}/trace.json"
+            import json
+            trace_data = {
+                "query": "test",
+                "codebase_path": "/tmp",
+                "timestamp": "2024-01-01T00:00:00",
+                "steps": {},
+                "hypotheses": [
+                    {
+                        "id": "other-id",
+                        "title": "Other hypothesis",
+                        "description": "Not the one we want",
+                        "target_metric": "accuracy",
+                    }
+                ],
+                "warnings": [],
+            }
+            Path(trace_path).write_text(json.dumps(trace_data))
+
+            result = runner.invoke(
+                app,
+                [
+                    "experiment", "setup",
+                    "--hypothesis-id", "abc123",
+                    "--time-budget", "30m",
+                    "--max-iterations", "10",
+                    "--trace", trace_path,
+                ],
+            )
+            assert result.exit_code == 1
+            assert "not found in trace" in result.output
+
+    def test_invalid_target_metric_exits_1(self) -> None:
+        """Invalid target_metric → exit code 1 (ES-04C)."""
+        from research_to_dev.cli.main import app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_path = f"{tmpdir}/trace.json"
+            import json
+            trace_data = {
+                "query": "test",
+                "codebase_path": "/tmp",
+                "timestamp": "2024-01-01T00:00:00",
+                "steps": {},
+                "hypotheses": [
+                    {
+                        "id": "abc123",
+                        "title": "Test",
+                        "description": "Test",
+                        "target_metric": "not_a_metric",
+                    }
+                ],
+                "warnings": [],
+            }
+            Path(trace_path).write_text(json.dumps(trace_data))
+
+            result = runner.invoke(
+                app,
+                [
+                    "experiment", "setup",
+                    "--hypothesis-id", "abc123",
+                    "--time-budget", "30m",
+                    "--max-iterations", "10",
+                    "--trace", trace_path,
+                ],
+            )
+            assert result.exit_code == 1
+            assert "not found" in result.output
+            assert "not_a_metric" in result.output
+
+
+class TestAnalyzeTraceSideEffect:
+    """Verify the analyze command writes trace.json side-effect (ES-03)."""
+
+    def test_analyze_writes_trace_json(self) -> None:
+        """analyze writes pipeline trace to .research-to-dev/pipeline/trace.json."""
+        from research_to_dev.cli.main import app
+        from research_to_dev.cli.orchestrator import PipelineTrace, StepTrace
+
+        trace = PipelineTrace(
+            query="test query",
+            codebase_path="/tmp/test",
+            timestamp="2024-01-01T00:00:00+00:00",
+            steps={
+                "retrieval": StepTrace(status="success"),
+                "extraction": StepTrace(status="success"),
+                "ranking": StepTrace(status="success"),
+                "profiling": StepTrace(status="success"),
+                "codebase": StepTrace(status="success"),
+                "correlation": StepTrace(status="success"),
+                "hypothesis": StepTrace(status="success"),
+            },
+            hypotheses=[
+                {
+                    "title": "Test Hypothesis",
+                    "composite": 8.5,
+                    "description": "A test",
+                    "supporting_papers": ["Paper A"],
+                }
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Change to tmpdir so that .research-to-dev/pipeline/ is created there
+            import os as _os
+            original_cwd = _os.getcwd()
+
+            try:
+                _os.chdir(tmpdir)
+
+                with (
+                    patch.dict(_os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True),
+                    patch("research_to_dev.cli.main.load_dotenv"),
+                    patch("research_to_dev.cli.main.AsyncOpenAI"),
+                    patch(
+                        "research_to_dev.cli.main.PipelineOrchestrator"
+                    ) as mock_orch,
+                ):
+                    mock_orch.return_value.run = AsyncMock(return_value=trace)
+
+                    outpath = f"{tmpdir}/results.json"
+                    result = runner.invoke(
+                        app,
+                        [
+                            "analyze",
+                            "--query",
+                            "test",
+                            "--codebase",
+                            tmpdir,
+                            "--output",
+                            outpath,
+                        ],
+                    )
+                    assert result.exit_code == 0
+
+                    # Verify side-effect trace exists
+                    trace_path = Path(".research-to-dev/pipeline/trace.json")
+                    assert trace_path.exists(), (
+                        f"Expected {trace_path} to exist after analyze"
+                    )
+                    data = json.loads(trace_path.read_text())
+                    assert data["query"] == "test query"
+            finally:
+                _os.chdir(original_cwd)
