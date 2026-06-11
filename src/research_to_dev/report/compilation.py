@@ -23,15 +23,23 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TYPE_CHECKING
 
 import typer
 
 from research_to_dev.experiment.program_reader import parse_program_md
+from research_to_dev.report.insights import ProgramContext
+
+if TYPE_CHECKING:
+    from research_to_dev.report.insights import InsightsGenerator, InsightsReport
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # TSH header — must match ResultsWriter._COLUMNS exactly
@@ -123,6 +131,7 @@ class CompiledReport:
 
     generated_at: str  # ISO 8601
     hypotheses: list[HypothesisSummary] = field(default_factory=list)
+    insights: InsightsReport | None = None
 
 
 # ===================================================================
@@ -382,12 +391,18 @@ def compile_hypothesis(
 def compile_all(
     reader: ResultsReader,
     experiments_dir: Path,
+    insights_generator: InsightsGenerator | None = None,
 ) -> CompiledReport:
     """Compile all experiment results into a ``CompiledReport``.
 
     Iterates subdirectories of *experiments_dir*, reads per-hypothesis
     ``results.tsv`` via the *reader* Protocol, discovers direction from
     ``program.md`` (falls back to ``"maximize"``).
+
+    When *insights_generator* is provided, collects ``ProgramContext``
+    from each hypothesis's ``program.md`` and generates cross-hypothesis
+    insights after compilation.  Insights generation failure is graceful
+    — the report compiles without insights rather than crashing.
 
     Hypothesis directories that lack a ``results.tsv`` are silently
     skipped (``FileNotFoundError`` caught).  An empty experiments
@@ -397,6 +412,9 @@ def compile_all(
         reader: A ``ResultsReader`` implementation.
         experiments_dir: Path to the experiments directory containing
             per-hypothesis subdirectories.
+        insights_generator: Optional ``InsightsGenerator`` for
+            cross-hypothesis LLM analysis.  When ``None`` (default),
+            no insights are generated.
 
     Returns:
         ``CompiledReport`` with one ``HypothesisSummary`` per experiment
@@ -404,6 +422,7 @@ def compile_all(
     """
     generated_at = datetime.now(timezone.utc).isoformat()
     hypotheses: list[HypothesisSummary] = []
+    program_contexts: list[ProgramContext] = []
 
     if not experiments_dir.exists() or not experiments_dir.is_dir():
         return CompiledReport(generated_at=generated_at, hypotheses=[])
@@ -422,19 +441,48 @@ def compile_all(
 
         # --- discover direction from program.md ---------------------------
         direction = "maximize"
+        program_spec = None
         program_md_path = entry / "program.md"
         if program_md_path.exists():
             try:
-                spec = parse_program_md(program_md_path)
-                direction = spec.direction
+                program_spec = parse_program_md(program_md_path)
+                direction = program_spec.direction
             except (ValueError, FileNotFoundError):
                 # Malformed program.md — fall back to default
                 pass
 
+        # --- collect ProgramContext for insights enrichment ---------------
+        if program_spec is not None:
+            baseline_str = ", ".join(
+                f"{k}={v}" for k, v in program_spec.baseline.items()
+            )
+            program_contexts.append(
+                ProgramContext(
+                    hypothesis_id=hypothesis_id,
+                    direction=program_spec.direction,
+                    baseline=baseline_str,
+                    success_criteria=program_spec.success_criteria,
+                )
+            )
+
         summary = compile_hypothesis(hypothesis_id, iterations, direction)
         hypotheses.append(summary)
 
-    return CompiledReport(generated_at=generated_at, hypotheses=hypotheses)
+    # --- generate cross-hypothesis insights --------------------------------
+    insights: InsightsReport | None = None
+    if insights_generator is not None and hypotheses:
+        try:
+            insights = asyncio.run(
+                insights_generator.generate(hypotheses, program_contexts)
+            )
+        except Exception as exc:
+            logger.warning("Insights generation failed: %s", exc)
+
+    return CompiledReport(
+        generated_at=generated_at,
+        hypotheses=hypotheses,
+        insights=insights,
+    )
 
 
 # ===================================================================
@@ -520,7 +568,101 @@ def format_markdown(report: CompiledReport) -> str:
             lines.append("*No iterations recorded.*")
             lines.append("")
 
+    # --- Cross-Hypothesis Insights section (if available) ---
+    if report.insights is not None:
+        from research_to_dev.report.insights import InsightsReport  # runtime import
+
+        insights: InsightsReport = report.insights
+
+        lines.append("---")
+        lines.append("")
+        lines.append("## Cross-Hypothesis Insights")
+        lines.append("")
+
+        # -- Patterns --
+        lines.append("### Patterns")
+        lines.append("")
+        if insights.patterns:
+            for p in insights.patterns:
+                lines.append(f"**{p.title}** [{p.confidence}]")
+                lines.append(p.description)
+                lines.append("")
+                lines.append(
+                    f"Hypotheses: {', '.join(p.affected_hypotheses)}"
+                )
+                lines.append("")
+        else:
+            lines.append("No patterns detected across hypotheses.")
+            lines.append("")
+
+        # -- Recommendations --
+        lines.append("### Recommendations")
+        lines.append("")
+        if insights.recommendations:
+            for r in insights.recommendations:
+                lines.append(f"- **[{r.priority}]** {r.action}")
+                lines.append(f"  {r.rationale}")
+                lines.append(
+                    f"  Evidence: {', '.join(r.supporting_evidence)}"
+                )
+                lines.append("")
+        else:
+            lines.append("No recommendations.")
+            lines.append("")
+
+        # -- Evidence Correlations --
+        lines.append("### Evidence Correlations")
+        lines.append("")
+        if insights.evidence_correlation:
+            for ec in insights.evidence_correlation:
+                lines.append(f"**{ec.paper_id}**")
+                lines.append(ec.evidence_summary)
+                lines.append(
+                    f"Hypotheses: {', '.join(ec.related_hypotheses)}"
+                    f" · Code: {', '.join(ec.code_areas)}"
+                )
+                lines.append("")
+        else:
+            lines.append("No evidence correlations found.")
+            lines.append("")
+
     return "\n".join(lines)
+
+
+def _insights_to_dict(insights) -> dict:
+    """Convert an InsightsReport to a JSON-serializable dict."""
+    # InsightsReport imported at runtime (TYPE_CHECKING guard at top)
+    from research_to_dev.report.insights import InsightsReport  # noqa: F401
+
+    return {
+        "patterns": [
+            {
+                "title": p.title,
+                "description": p.description,
+                "affected_hypotheses": p.affected_hypotheses,
+                "confidence": p.confidence,
+            }
+            for p in insights.patterns
+        ],
+        "recommendations": [
+            {
+                "action": r.action,
+                "priority": r.priority,
+                "rationale": r.rationale,
+                "supporting_evidence": r.supporting_evidence,
+            }
+            for r in insights.recommendations
+        ],
+        "evidence_correlation": [
+            {
+                "paper_id": ec.paper_id,
+                "evidence_summary": ec.evidence_summary,
+                "related_hypotheses": ec.related_hypotheses,
+                "code_areas": ec.code_areas,
+            }
+            for ec in insights.evidence_correlation
+        ],
+    }
 
 
 def format_json(report: CompiledReport) -> str:
@@ -562,13 +704,15 @@ def format_json(report: CompiledReport) -> str:
         }
         return result
 
-    return json.dumps(
-        {
-            "generated_at": report.generated_at,
-            "hypotheses": [_hyp_to_dict(h) for h in report.hypotheses],
-        },
-        indent=2,
-    )
+    result_dict: dict = {
+        "generated_at": report.generated_at,
+        "hypotheses": [_hyp_to_dict(h) for h in report.hypotheses],
+    }
+
+    if report.insights is not None:
+        result_dict["insights"] = _insights_to_dict(report.insights)
+
+    return json.dumps(result_dict, indent=2)
 
 
 # ===================================================================
