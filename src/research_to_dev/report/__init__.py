@@ -25,12 +25,28 @@ from research_to_dev.report.compilation import (
     format_markdown,
     write_reports,
 )
+from research_to_dev.report.insights import (
+    EvidenceCorrelation,
+    InsightsGenerator,
+    InsightsReport,
+    OpenAIInsightsGenerator,
+    PatternInsight,
+    ProgramContext,
+    Recommendation,
+)
 
 __all__ = [
     "BaselineComparison",
     "CompiledReport",
+    "EvidenceCorrelation",
     "HypothesisSummary",
+    "InsightsGenerator",
+    "InsightsReport",
     "IterationResult",
+    "OpenAIInsightsGenerator",
+    "PatternInsight",
+    "ProgramContext",
+    "Recommendation",
     "ResultsReader",
     "TsvResultsReader",
     "compile_all",
