@@ -477,10 +477,22 @@ class PipelineOrchestrator:
             )
             trace.hypotheses = [
                 {
+                    "id": h.id,
                     "title": h.title,
                     "composite": h.composite,
                     "description": h.description,
                     "supporting_papers": h.supporting_papers,
+                    "approach": h.approach,
+                    "target_metric": h.target_metric,
+                    "expected_improvement": h.expected_improvement,
+                    "code_changes": h.code_changes,
+                    "success_criteria": h.success_criteria,
+                    "scores": {
+                        "relevance": h.scores.relevance,
+                        "feasibility": h.scores.feasibility,
+                        "evidence": h.scores.evidence,
+                    },
+                    "correlations": h.correlations,
                 }
                 for h in sorted_h
             ]
