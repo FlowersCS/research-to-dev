@@ -189,6 +189,9 @@ class ReportConfig:
     include_insights: bool = False
     """Whether to include LLM-generated insights (no-op placeholder for now)."""
 
+    insights_model: str = "gpt-4o-mini"
+    """OpenAI chat model used for cross-hypothesis insights generation."""
+
 
 @dataclass
 class CodebaseConfig:

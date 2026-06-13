@@ -18,6 +18,13 @@ from research_to_dev.report.compilation import (
     compile_all,
     compile_hypothesis,
 )
+from research_to_dev.report.insights import (
+    EvidenceCorrelation,
+    InsightsReport,
+    PatternInsight,
+    ProgramContext,
+    Recommendation,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -422,3 +429,257 @@ class TestCompileAll:
             report = compile_all(reader, exp_dir)
 
             assert len(report.hypotheses) == 1
+
+
+# ---------------------------------------------------------------------------
+# LI-13: compilation integration tests — insights_generator parameter
+# ---------------------------------------------------------------------------
+
+
+class MockInsightsGenerator:
+    """Test double satisfying InsightsGenerator Protocol.
+
+    Can be configured to return an InsightsReport, None, or raise
+    an exception via constructor parameters.
+    """
+
+    def __init__(
+        self,
+        return_value: InsightsReport | None = None,
+        should_raise: bool = False,
+    ) -> None:
+        self.return_value = return_value
+        self.should_raise = should_raise
+        self.generate_called = False
+        self.last_hypotheses: list | None = None
+        self.last_contexts: list | None = None
+
+    async def generate(
+        self,
+        hypotheses: list,
+        program_contexts: list | None = None,
+    ) -> InsightsReport | None:
+        self.generate_called = True
+        self.last_hypotheses = hypotheses
+        self.last_contexts = program_contexts
+        if self.should_raise:
+            raise RuntimeError("LLM failure")
+        return self.return_value
+
+
+class TestCompileAllWithInsights:
+    """compile_all with insights_generator parameter."""
+
+    def test_compile_all_without_insights_generator(self) -> None:
+        """Default insights_generator=None → report.insights is None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+            h1_dir = exp_dir / "h1"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(reader, exp_dir)
+
+            assert report.insights is None
+            assert len(report.hypotheses) == 1
+            assert report.hypotheses[0].hypothesis_id == "h1"
+
+    def test_compile_all_with_insights_generator_success(self) -> None:
+        """Mock generator returns InsightsReport → report.insights is
+        populated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+            h1_dir = exp_dir / "h1"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            expected_insights = InsightsReport(
+                patterns=[
+                    PatternInsight(
+                        title="Pattern 1",
+                        description="Some pattern.",
+                        affected_hypotheses=["h1"],
+                        confidence="high",
+                    ),
+                ],
+            )
+            mock_gen = MockInsightsGenerator(return_value=expected_insights)
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(
+                reader, exp_dir, insights_generator=mock_gen
+            )
+
+            assert mock_gen.generate_called
+            assert report.insights is not None
+            assert report.insights.patterns[0].title == "Pattern 1"
+            assert len(report.hypotheses) == 1
+
+    def test_compile_all_with_insights_generator_failure(self) -> None:
+        """Mock generator raises exception → report.insights is None
+        (graceful degradation)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+            h1_dir = exp_dir / "h1"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            mock_gen = MockInsightsGenerator(should_raise=True)
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(
+                reader, exp_dir, insights_generator=mock_gen
+            )
+
+            assert mock_gen.generate_called
+            assert report.insights is None
+            assert len(report.hypotheses) == 1  # Still compiled
+
+    def test_compile_all_program_contexts_collected(self) -> None:
+        """ProgramContext objects have correct field mapping from
+        program.md."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+            h1_dir = exp_dir / "h1"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            mock_gen = MockInsightsGenerator(
+                return_value=InsightsReport(),
+            )
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(
+                reader, exp_dir, insights_generator=mock_gen
+            )
+
+            # Verify ProgramContext was collected and passed to generator
+            assert mock_gen.last_contexts is not None
+            assert len(mock_gen.last_contexts) == 1
+            ctx = mock_gen.last_contexts[0]
+            assert ctx.hypothesis_id == "h1"
+            assert ctx.direction == "minimize"
+            # baseline is serialized from "val_loss: 0.5" → "val_loss=0.5"
+            assert "val_loss=0.5" in ctx.baseline
+            assert ctx.success_criteria == "val_loss < 0.3"
+
+    def test_compile_all_skips_program_context_when_program_md_missing(
+        self,
+    ) -> None:
+        """ERR-06: Hypothesis dir without program.md → ProgramContext skipped.
+
+        When a hypothesis directory has no program.md, compile_all()
+        should NOT add a ProgramContext for it. Only hypotheses with
+        valid program.md files get ProgramContext entries.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+
+            # Hypothesis with program.md
+            h1_dir = exp_dir / "h1"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            # Hypothesis WITHOUT program.md (ERR-06 scenario)
+            h2_dir = exp_dir / "h2"
+            h2_dir.mkdir()
+            (h2_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\taccuracy\t0.92\t0.90\t0.02\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            # No program.md created — deliberate
+
+            mock_gen = MockInsightsGenerator(
+                return_value=InsightsReport(),
+            )
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(
+                reader, exp_dir, insights_generator=mock_gen
+            )
+
+            # Both hypotheses should be compiled
+            assert len(report.hypotheses) == 2
+
+            # But only h1 (with program.md) gets a ProgramContext
+            assert mock_gen.last_contexts is not None
+            assert len(mock_gen.last_contexts) == 1
+            assert mock_gen.last_contexts[0].hypothesis_id == "h1"
+
+    def test_compile_all_skips_program_context_when_program_md_malformed(
+        self,
+    ) -> None:
+        """ERR-07: Malformed program.md → ProgramContext skipped.
+
+        When program.md has invalid YAML frontmatter (e.g. missing
+        required keys, broken syntax), compile_all() should skip the
+        ProgramContext for that hypothesis so it doesn't crash the
+        entire compilation.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+
+            # Hypothesis with MALFORMED program.md (ERR-07 scenario)
+            h1_dir = exp_dir / "h1"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            # Invalid YAML frontmatter (unclosed quotes, broken structure)
+            (h1_dir / "program.md").write_text(
+                "---\nkey: \"unclosed value\n---\n",
+                encoding="utf-8",
+            )
+
+            mock_gen = MockInsightsGenerator(
+                return_value=InsightsReport(),
+            )
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(
+                reader, exp_dir, insights_generator=mock_gen
+            )
+
+            # Hypothesis still compiles (direction falls back to "maximize")
+            assert len(report.hypotheses) == 1
+            assert report.hypotheses[0].hypothesis_id == "h1"
+
+            # But NO ProgramContext is collected (malformed → skipped)
+            assert mock_gen.last_contexts is not None
+            assert len(mock_gen.last_contexts) == 0

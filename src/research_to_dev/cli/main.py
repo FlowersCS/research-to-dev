@@ -492,7 +492,7 @@ def report(
     with_insights: bool = typer.Option(
         False,
         "--with-insights",
-        help="Include LLM-generated insights (placeholder — no-op for now).",
+        help="Include LLM-generated insights in the report.",
     ),
 ) -> None:
     """Compile experiment results into markdown and JSON reports.
@@ -515,6 +515,26 @@ def report(
         hypothesis_filter=hypothesis,
         include_insights=with_insights,
     )
+
+    # -- Insights generator wiring ----------------------------------------
+    insights_generator = None
+    if config.include_insights:
+        load_dotenv()
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            typer.echo(
+                "Warning: OPENAI_API_KEY not set. "
+                "Insights generation skipped.",
+                err=True,
+            )
+        else:
+            from research_to_dev.report.insights import OpenAIInsightsGenerator
+
+            insights_client = AsyncOpenAI(api_key=api_key)
+            insights_generator = OpenAIInsightsGenerator(
+                client=insights_client,
+                model=config.insights_model,
+            )
 
     experiments_dir = Path(config.experiments_dir)
     reports_dir = Path(config.reports_dir)
@@ -583,7 +603,11 @@ def report(
         )
     else:
         # All hypotheses mode
-        compiled = compile_all(reader, experiments_dir)
+        compiled = compile_all(
+            reader,
+            experiments_dir,
+            insights_generator=insights_generator,
+        )
 
         if not compiled.hypotheses:
             typer.echo(
@@ -593,7 +617,15 @@ def report(
             )
             raise typer.Exit(code=1)
 
-    # -- 4. Write reports -------------------------------------------------
+    # -- 4. Insights failure check (when generation was attempted) --------
+    if insights_generator is not None and compiled.insights is None:
+        typer.echo(
+            "Warning: Insights generation failed. "
+            "Report compiled without insights.",
+            err=True,
+        )
+
+    # -- 5. Write reports -------------------------------------------------
     md_path, json_path = write_reports(compiled, reports_dir)
 
     typer.echo(f"Report written to {md_path}")
