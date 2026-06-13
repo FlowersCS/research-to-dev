@@ -13,6 +13,11 @@ from research_to_dev.report.compilation import (
     format_json,
     format_markdown,
 )
+from research_to_dev.report.traceability import (
+    CorrelationTrace,
+    HypothesisOrigin,
+    TraceabilityContext,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -307,3 +312,405 @@ class TestFormatJson:
         """JSON output is indented for readability."""
         json_str = format_json(_sample_report())
         assert "  " in json_str  # indent=2
+
+
+# ---------------------------------------------------------------------------
+# TR-11: Hypothesis anchors in format_markdown
+# ---------------------------------------------------------------------------
+
+
+class TestFormatMarkdownAnchors:
+    """TR-11: Hypothesis heading anchors."""
+
+    def test_anchors_present_without_traceability(self) -> None:
+        """Angular anchors render even when traceability is None."""
+        report = _sample_report()
+        md = format_markdown(report)
+
+        # Anchor tag appears before each hypothesis heading
+        assert '<a id="hyp-abc123"></a>' in md
+        assert '## Hypothesis: abc123' in md
+        assert '<a id="hyp-def456"></a>' in md
+        assert '## Hypothesis: def456' in md
+
+    def test_anchors_present_with_traceability(self) -> None:
+        """Anchors render when traceability context is provided."""
+        report = _sample_report()
+        report.traceability = TraceabilityContext(
+            hypothesis_origins={},
+            claim_anchors={},
+            component_anchors={},
+        )
+        md = format_markdown(report)
+
+        assert '<a id="hyp-abc123"></a>' in md
+        assert '<a id="hyp-def456"></a>' in md
+
+    def test_anchor_before_heading(self) -> None:
+        """The anchor tag appears immediately before the ## Hypothesis
+        heading (same line or preceding line)."""
+        report = _sample_report()
+        md = format_markdown(report)
+
+        # Verify order: anchor comes before the heading
+        anchor_pos = md.find('<a id="hyp-abc123"></a>')
+        heading_pos = md.find('## Hypothesis: abc123')
+        assert anchor_pos >= 0
+        assert heading_pos >= 0
+        assert anchor_pos < heading_pos
+
+    def test_empty_report_no_anchors(self) -> None:
+        """Empty report with no hypotheses has no anchor tags."""
+        report = CompiledReport(
+            generated_at="2026-06-07T14:30:00Z",
+            hypotheses=[],
+        )
+        md = format_markdown(report)
+        assert '<a id="hyp-' not in md
+        assert "*No hypothesis results to report.*" in md
+
+
+# ---------------------------------------------------------------------------
+# TR-12: Traceability subsection in format_markdown
+# ---------------------------------------------------------------------------
+
+
+def _make_trace_context() -> TraceabilityContext:
+    """Build a TraceabilityContext with one hypothesis, one resolved and
+    one unresolved correlation."""
+    return TraceabilityContext(
+        hypothesis_origins={
+            "abc123": HypothesisOrigin(
+                hypothesis_id="abc123",
+                title="Optimize gradient descent with Adam",
+                description="Replace SGD with Adam optimizer to improve convergence speed and final accuracy on validation set.",
+                code_changes="Replace torch.optim.SGD with torch.optim.Adam in train.py",
+                supporting_papers=["arxiv-1412.6980", "arxiv-1609.04747"],
+                resolved_correlations=[
+                    CorrelationTrace(
+                        correlation_id="abcd1234abcd",
+                        paper_title="Adam: A Method for Stochastic Optimization",
+                        claim_text="Adam combines the advantages of AdaGrad and RMSProp.",
+                        claim_section="abstract",
+                        claim_paper_id="arxiv-1412.6980",
+                        component_name="Adam optimizer",
+                        component_file_path="/src/train.py",
+                        component_module_name="research_to_dev.train",
+                        component_signature="def train() -> None:",
+                        correlation_type="direct_solution",
+                        reasoning="Directly applies Adam as the optimization method.",
+                        target_type="component",
+                    ),
+                ],
+                unresolved_correlation_ids=["deadbeefdead"],
+            ),
+        },
+        claim_anchors={
+            "claim-abcd1234": "Adam combines the advantages of AdaGrad and RMSProp.",
+        },
+        component_anchors={
+            "comp-research_to_dev-train-abcd1234": (
+                "/src/train.py",
+                "research_to_dev.train",
+                "def train() -> None:",
+            ),
+        },
+    )
+
+
+class TestFormatMarkdownTraceabilitySubsection:
+    """TR-12: Traceability subsections under each hypothesis."""
+
+    def test_subsection_rendered_when_traceability_present(self) -> None:
+        """When traceability exists, ### Traceability subsection appears."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "### Traceability" in md
+        # Should appear under hypothesis abc123 (the one with origin data)
+        assert "Optimize gradient descent with Adam" in md
+
+    def test_subsection_not_rendered_when_traceability_none(self) -> None:
+        """When traceability is None, no ### Traceability subsection."""
+        report = _sample_report()
+        report.traceability = None
+        md = format_markdown(report)
+
+        assert "### Traceability" not in md
+
+    def test_description_truncated(self) -> None:
+        """Description longer than 80 chars is truncated with '…'."""
+        report = _sample_report()
+        ctx = _make_trace_context()
+        # Verify the description is longer than 80 chars
+        long_desc = ctx.hypothesis_origins["abc123"].description
+        assert len(long_desc) > 80
+        report.traceability = ctx
+        md = format_markdown(report)
+
+        # The truncated version (80 chars) should appear
+        truncated = long_desc[:80] + "…"
+        assert truncated in md
+        # The full version should NOT be in the subsection
+        # (the subsection uses truncated, not full)
+        # But description may appear in other places, so just verify
+        # the truncation prefix is there
+        assert long_desc[:80] in md
+
+    def test_supporting_papers_listed(self) -> None:
+        """Supporting papers appear in the subsection."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "arxiv-1412.6980" in md
+        assert "arxiv-1609.04747" in md
+
+    def test_resolved_correlations_with_links(self) -> None:
+        """Resolved correlations appear with links to appendix."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "Adam combines" in md
+        assert 'comp-' in md or 'claim-' in md  # Links to appendix
+
+    def test_unresolved_correlations_marked(self) -> None:
+        """Unresolved correlations are marked with warning."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "⚠ Unresolved" in md
+        assert "deadbeefdead" in md
+
+    def test_appendix_link_present(self) -> None:
+        """Link to full traceability appendix is present."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "[Full traceability detail →]" in md
+        assert "(#traceability-appendix)" in md
+
+    def test_empty_correlations_shows_no_resolved(self) -> None:
+        """When a hypothesis has no correlations resolved or unresolved,
+        show 'No correlations resolved'."""
+        report = _sample_report()
+        ctx = TraceabilityContext(
+            hypothesis_origins={
+                "abc123": HypothesisOrigin(
+                    hypothesis_id="abc123",
+                    title="Simple hypothesis",
+                    description="No papers, no correlations.",
+                    code_changes="",
+                    supporting_papers=[],
+                    resolved_correlations=[],
+                    unresolved_correlation_ids=[],
+                ),
+            },
+            claim_anchors={},
+            component_anchors={},
+        )
+        report.traceability = ctx
+        md = format_markdown(report)
+
+        assert "No correlations resolved" in md
+        # Still shows title
+        assert "Simple hypothesis" in md
+
+
+# ---------------------------------------------------------------------------
+# TR-13: Traceability appendix in format_markdown
+# ---------------------------------------------------------------------------
+
+
+class TestFormatMarkdownTraceabilityAppendix:
+    """TR-13: Traceability appendix after Insights section."""
+
+    def test_appendix_rendered_when_traceability_present(self) -> None:
+        """When traceability exists, the appendix section appears."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "## Traceability Appendix" in md
+
+    def test_appendix_not_rendered_when_traceability_none(self) -> None:
+        """When traceability is None, no appendix section appears."""
+        report = _sample_report()
+        report.traceability = None
+        md = format_markdown(report)
+
+        assert "## Traceability Appendix" not in md
+
+    def test_appendix_has_anchor(self) -> None:
+        """The appendix section has a traceability-appendix anchor."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert '<a id="traceability-appendix"></a>' in md
+
+    def test_claims_section_with_anchors(self) -> None:
+        """Claims section contains claim anchors with hash8 IDs."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "### Claims" in md
+        # The claim anchor should exist
+        assert '<a id="claim-' in md
+        # The claim text should be present
+        assert "Adam combines the advantages of AdaGrad and RMSProp." in md
+
+    def test_code_components_section_with_anchors(self) -> None:
+        """Code Components section contains component anchors."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        assert "### Code Components" in md
+        assert '<a id="comp-' in md
+        assert "research_to_dev.train" in md
+
+    def test_appendix_after_insights(self) -> None:
+        """The traceability appendix appears after the Insights section."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        # Appendix should come after any insights content
+        # Since no insights are set, appendix should be near the end
+        appendix_pos = md.find("## Traceability Appendix")
+        assert appendix_pos > 0
+        # Should be after the last hypothesis
+        last_hyp_pos = md.find("## Hypothesis: def456")
+        assert appendix_pos > last_hyp_pos
+
+    def test_cross_links_from_subsection_to_appendix(self) -> None:
+        """The subsection links correctly reference appendix anchors."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        md = format_markdown(report)
+
+        # Subsection should have link to appendix
+        assert "[Full traceability detail →]" in md
+        assert "(#traceability-appendix)" in md
+
+        # Claim anchors should exist
+        for anchor_id in report.traceability.claim_anchors:
+            assert f'id="{anchor_id}"' in md, f"Claim anchor {anchor_id} not found in output"
+
+    def test_empty_appendix_with_no_correlations(self) -> None:
+        """When traceability has no correlations, appendix renders with
+        empty sections."""
+        report = _sample_report()
+        report.traceability = TraceabilityContext(
+            hypothesis_origins={
+                "abc123": HypothesisOrigin(
+                    hypothesis_id="abc123",
+                    title="Simple",
+                    description="Simple description.",
+                    code_changes="",
+                ),
+            },
+            claim_anchors={},
+            component_anchors={},
+        )
+        md = format_markdown(report)
+
+        assert "## Traceability Appendix" in md
+        assert "### Claims" in md
+        assert "### Code Components" in md
+
+
+# ---------------------------------------------------------------------------
+# TR-14: Traceability key in format_json
+# ---------------------------------------------------------------------------
+
+
+class TestFormatJsonTraceability:
+    """TR-14: format_json includes traceability key when present."""
+
+    def test_json_contains_traceability_when_present(self) -> None:
+        """When report.traceability exists, JSON has 'traceability' key."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        json_str = format_json(report)
+        parsed = json.loads(json_str)
+
+        assert "traceability" in parsed
+        trace_data = parsed["traceability"]
+        assert "hypothesis_origins" in trace_data
+        assert "claim_anchors" in trace_data
+        assert "component_anchors" in trace_data
+
+    def test_json_omits_traceability_when_none(self) -> None:
+        """When report.traceability is None, JSON has no 'traceability'
+        key."""
+        report = _sample_report()
+        report.traceability = None
+        json_str = format_json(report)
+        parsed = json.loads(json_str)
+
+        assert "traceability" not in parsed
+        assert "generated_at" in parsed
+        assert "hypotheses" in parsed
+
+    def test_json_traceability_preserves_hypothesis_origins(self) -> None:
+        """The hypothesis_origins data is serialized correctly."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        json_str = format_json(report)
+        parsed = json.loads(json_str)
+
+        origins = parsed["traceability"]["hypothesis_origins"]
+        assert "abc123" in origins
+        origin = origins["abc123"]
+        assert origin["title"] == "Optimize gradient descent with Adam"
+        assert len(origin["resolved_correlations"]) == 1
+        assert len(origin["unresolved_correlation_ids"]) == 1
+
+    def test_json_traceability_preserves_claim_anchors(self) -> None:
+        """The claim_anchors mapping is serialized."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        json_str = format_json(report)
+        parsed = json.loads(json_str)
+
+        claims = parsed["traceability"]["claim_anchors"]
+        # claim_anchors is dict[str, str]
+        for anchor_id, claim_text in report.traceability.claim_anchors.items():
+            assert claims[anchor_id] == claim_text
+
+    def test_json_traceability_preserves_component_anchors(self) -> None:
+        """The component_anchors mapping is serialized."""
+        report = _sample_report()
+        report.traceability = _make_trace_context()
+        json_str = format_json(report)
+        parsed = json.loads(json_str)
+
+        comps = parsed["traceability"]["component_anchors"]
+        # component_anchors is dict[str, [file_path, module_name, signature]]
+        for anchor_id, (fp, mn, sig) in (
+            report.traceability.component_anchors.items()
+        ):
+            assert comps[anchor_id] == [fp, mn, sig]
+
+    def test_json_traceability_roundtrip(self) -> None:
+        """JSON round-trip with traceability preserves all data."""
+        report = _sample_report()
+        ctx = _make_trace_context()
+        report.traceability = ctx
+        json_str = format_json(report)
+        parsed = json.loads(json_str)
+
+        # Verify round-trip preserves hypotheses
+        assert len(parsed["hypotheses"]) == 2
+        # Verify traceability key
+        trace = parsed["traceability"]
+        assert len(trace["hypothesis_origins"]) == len(ctx.hypothesis_origins)
+        assert len(trace["claim_anchors"]) == len(ctx.claim_anchors)
+        assert len(trace["component_anchors"]) == len(ctx.component_anchors)

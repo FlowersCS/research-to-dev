@@ -35,6 +35,11 @@ import typer
 
 from research_to_dev.experiment.program_reader import parse_program_md
 from research_to_dev.report.insights import ProgramContext
+from research_to_dev.report.traceability import (
+    CorrelationTrace,
+    HypothesisOrigin,
+    TraceabilityContext,
+)
 
 if TYPE_CHECKING:
     from research_to_dev.report.insights import InsightsGenerator, InsightsReport
@@ -132,6 +137,7 @@ class CompiledReport:
     generated_at: str  # ISO 8601
     hypotheses: list[HypothesisSummary] = field(default_factory=list)
     insights: InsightsReport | None = None
+    traceability: TraceabilityContext | None = field(default=None)
 
 
 # ===================================================================
@@ -392,6 +398,7 @@ def compile_all(
     reader: ResultsReader,
     experiments_dir: Path,
     insights_generator: InsightsGenerator | None = None,
+    traceability: TraceabilityContext | None = None,
 ) -> CompiledReport:
     """Compile all experiment results into a ``CompiledReport``.
 
@@ -482,6 +489,7 @@ def compile_all(
         generated_at=generated_at,
         hypotheses=hypotheses,
         insights=insights,
+        traceability=traceability,
     )
 
 
@@ -506,6 +514,8 @@ def format_markdown(report: CompiledReport) -> str:
         return "\n".join(lines)
 
     for hyp in report.hypotheses:
+        lines.append(f'<a id="hyp-{hyp.hypothesis_id}"></a>')
+        lines.append("")
         lines.append(f"## Hypothesis: {hyp.hypothesis_id}")
         lines.append("")
 
@@ -568,6 +578,81 @@ def format_markdown(report: CompiledReport) -> str:
             lines.append("*No iterations recorded.*")
             lines.append("")
 
+        # --- Traceability subsection (TR-12) ---
+        if report.traceability is not None:
+            origin = report.traceability.hypothesis_origins.get(hyp.hypothesis_id)
+            if origin is not None:
+                lines.append("### Traceability")
+                lines.append("")
+                lines.append(f"- **Title**: {origin.title or 'N/A'}")
+                # Description truncated to 80 chars
+                desc = origin.description or ""
+                if len(desc) > 80:
+                    desc = desc[:80] + "…"
+                lines.append(f"- **Description**: {desc}")
+                # Supporting papers
+                if origin.supporting_papers:
+                    lines.append(
+                        f"- **Supporting papers**: "
+                        f"{', '.join(origin.supporting_papers)}"
+                    )
+                else:
+                    lines.append("- **Supporting papers**: None")
+                lines.append("")
+
+                # Resolved correlations
+                if origin.resolved_correlations:
+                    lines.append("#### Resolved Correlations")
+                    lines.append("")
+                    for ct in origin.resolved_correlations:
+                        # Truncate claim text for display
+                        claim_short = (
+                            ct.claim_text[:120] + "…"
+                            if len(ct.claim_text) > 120
+                            else ct.claim_text
+                        )
+                        # Reference to claim/component in appendix
+                        claim_anchor = report.traceability.claim_anchors
+                        comp_anchor = report.traceability.component_anchors
+                        # Find the matching claim anchor
+                        claim_link = ""
+                        for aid, atext in claim_anchor.items():
+                            if atext == ct.claim_text:
+                                claim_link = f"[claim](#{aid})"
+                                break
+                        comp_link = ""
+                        for aid, (fp, mn, sig) in comp_anchor.items():
+                            if mn == ct.component_module_name:
+                                comp_link = f"[component](#{aid})"
+                                break
+
+                        lines.append(f"- **{ct.correlation_type}**: {claim_short}")
+                        if claim_link or comp_link:
+                            links = " · ".join(
+                                l for l in [claim_link, comp_link] if l
+                            )
+                            lines.append(f"  📎 {links}")
+                        lines.append("")
+                else:
+                    if origin.unresolved_correlation_ids:
+                        lines.append("#### Resolved Correlations")
+                        lines.append("")
+                    lines.append("No correlations resolved")
+                    lines.append("")
+
+                # Unresolved correlations
+                if origin.unresolved_correlation_ids:
+                    lines.append("#### Unresolved")
+                    lines.append("")
+                    for uid in origin.unresolved_correlation_ids:
+                        lines.append(f"- ⚠ Unresolved: {uid}")
+                    lines.append("")
+
+                lines.append(
+                    "[Full traceability detail →](#traceability-appendix)"
+                )
+                lines.append("")
+
     # --- Cross-Hypothesis Insights section (if available) ---
     if report.insights is not None:
         from research_to_dev.report.insights import InsightsReport  # runtime import
@@ -626,6 +711,51 @@ def format_markdown(report: CompiledReport) -> str:
             lines.append("No evidence correlations found.")
             lines.append("")
 
+    # --- Traceability Appendix (TR-13) ---
+    if report.traceability is not None:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Traceability Appendix")
+        lines.append("")
+        lines.append('<a id="traceability-appendix"></a>')
+        lines.append("")
+
+        # -- Claims section --
+        lines.append("### Claims")
+        lines.append("")
+        if report.traceability.claim_anchors:
+            for anchor_id, claim_text in report.traceability.claim_anchors.items():
+                lines.append(f'<a id="{anchor_id}"></a>')
+                lines.append("")
+                lines.append(f"**Claim `{anchor_id}`**")
+                lines.append("")
+                lines.append(claim_text)
+                lines.append("")
+                # List components mapped to this claim
+                # We need to find which components reference this claim
+                # For now, list all components (they are independently rendered)
+                lines.append("")
+        else:
+            lines.append("*No claims recorded.*")
+            lines.append("")
+
+        # -- Code Components section --
+        lines.append("### Code Components")
+        lines.append("")
+        if report.traceability.component_anchors:
+            for anchor_id, (file_path, module_name, signature) in report.traceability.component_anchors.items():
+                lines.append(f'<a id="{anchor_id}"></a>')
+                lines.append("")
+                lines.append(f"**Component `{anchor_id}`**")
+                lines.append("")
+                lines.append(f"- **File**: `{file_path}`" if file_path else "- **File**: N/A")
+                lines.append(f"- **Module**: `{module_name}`")
+                lines.append(f"- **Signature**: `{signature}`")
+                lines.append("")
+        else:
+            lines.append("*No code components recorded.*")
+            lines.append("")
+
     return "\n".join(lines)
 
 
@@ -662,6 +792,52 @@ def _insights_to_dict(insights) -> dict:
             }
             for ec in insights.evidence_correlation
         ],
+    }
+
+
+def _traceability_to_dict(traceability: TraceabilityContext) -> dict:
+    """Convert a TraceabilityContext to a JSON-serializable dict."""
+
+    def _correlation_to_dict(ct: CorrelationTrace) -> dict:
+        return {
+            "correlation_id": ct.correlation_id,
+            "paper_title": ct.paper_title,
+            "claim_text": ct.claim_text,
+            "claim_section": ct.claim_section,
+            "claim_paper_id": ct.claim_paper_id,
+            "component_name": ct.component_name,
+            "component_file_path": ct.component_file_path,
+            "component_module_name": ct.component_module_name,
+            "component_signature": ct.component_signature,
+            "correlation_type": ct.correlation_type,
+            "reasoning": ct.reasoning,
+            "target_type": ct.target_type,
+        }
+
+    def _origin_to_dict(origin: HypothesisOrigin) -> dict:
+        return {
+            "hypothesis_id": origin.hypothesis_id,
+            "title": origin.title,
+            "description": origin.description,
+            "code_changes": origin.code_changes,
+            "supporting_papers": origin.supporting_papers,
+            "resolved_correlations": [
+                _correlation_to_dict(ct)
+                for ct in origin.resolved_correlations
+            ],
+            "unresolved_correlation_ids": origin.unresolved_correlation_ids,
+        }
+
+    return {
+        "hypothesis_origins": {
+            hid: _origin_to_dict(origin)
+            for hid, origin in traceability.hypothesis_origins.items()
+        },
+        "claim_anchors": dict(traceability.claim_anchors),
+        "component_anchors": {
+            aid: list(data)
+            for aid, data in traceability.component_anchors.items()
+        },
     }
 
 
@@ -711,6 +887,9 @@ def format_json(report: CompiledReport) -> str:
 
     if report.insights is not None:
         result_dict["insights"] = _insights_to_dict(report.insights)
+
+    if report.traceability is not None:
+        result_dict["traceability"] = _traceability_to_dict(report.traceability)
 
     return json.dumps(result_dict, indent=2)
 

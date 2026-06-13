@@ -1577,3 +1577,346 @@ class TestExperimentRunCli:
             )
             assert "program.md not found" in result.output
             assert "nonexistent" in result.output
+
+
+# ======================================================================
+# TR-17: _compute_verdict() unit tests
+# ======================================================================
+
+
+class TestComputeVerdict:
+    """Unit tests for _compute_verdict() rule-based verdict counting."""
+
+    @staticmethod
+    def _make_hypothesis(
+        hyp_id: str, status: str, best_improvement: float | None = None
+    ):
+        """Build a minimal HypothesisSummary for verdict testing."""
+        from research_to_dev.report.compilation import (
+            BaselineComparison,
+            HypothesisSummary,
+        )
+
+        bc = None
+        if best_improvement is not None:
+            bc = BaselineComparison(
+                best_improvement=best_improvement,
+                overall_trend=status,
+            )
+
+        return HypothesisSummary(
+            hypothesis_id=hyp_id,
+            status=status,
+            iterations_total=1,
+            iterations_kept=1 if status == "improved" else 0,
+            iterations_discarded=0,
+            iterations_crashed=0,
+            best_metric_value=best_improvement,
+            baseline_comparison=bc,
+        )
+
+    def test_all_improved(self) -> None:
+        """All hypotheses improved → 'N/N hypotheses improved vs baseline'."""
+        from research_to_dev.cli.main import _compute_verdict
+
+        hyps = [
+            self._make_hypothesis("h1", "improved", 0.05),
+            self._make_hypothesis("h2", "improved", 0.10),
+            self._make_hypothesis("h3", "improved", 0.02),
+        ]
+        result = _compute_verdict(hyps)
+        assert result == "3/3 hypotheses improved vs baseline"
+
+    def test_all_declined(self) -> None:
+        """All hypotheses worsened → '0/N hypotheses improved vs baseline'."""
+        from research_to_dev.cli.main import _compute_verdict
+
+        hyps = [
+            self._make_hypothesis("h1", "worsened", -0.05),
+            self._make_hypothesis("h2", "worsened", -0.10),
+            self._make_hypothesis("h3", "worsened", -0.02),
+        ]
+        result = _compute_verdict(hyps)
+        assert result == "0/3 hypotheses improved vs baseline"
+
+    def test_mixed(self) -> None:
+        """Mixed: improved + worsened + neutral → correct count."""
+        from research_to_dev.cli.main import _compute_verdict
+
+        hyps = [
+            self._make_hypothesis("h1", "improved", 0.05),
+            self._make_hypothesis("h2", "improved", 0.10),
+            self._make_hypothesis("h3", "worsened", -0.02),
+            self._make_hypothesis("h4", "crash", None),
+            self._make_hypothesis("h5", "worsened", -0.01),
+        ]
+        result = _compute_verdict(hyps)
+        assert result == "2/5 hypotheses improved vs baseline"
+
+    def test_no_metrics_all_neutral(self) -> None:
+        """All crashed/no_iterations → '0/N hypotheses improved vs baseline'."""
+        from research_to_dev.cli.main import _compute_verdict
+
+        hyps = [
+            self._make_hypothesis("h1", "crash", None),
+            self._make_hypothesis("h2", "no_iterations", None),
+            self._make_hypothesis("h3", "crash", None),
+        ]
+        result = _compute_verdict(hyps)
+        assert result == "0/3 hypotheses improved vs baseline"
+
+    def test_neutral_mixed_with_improved(self) -> None:
+        """Neutral (crash) + improved → neutral counted as non-improved."""
+        from research_to_dev.cli.main import _compute_verdict
+
+        hyps = [
+            self._make_hypothesis("h1", "improved", 0.03),
+            self._make_hypothesis("h2", "crash", None),
+            self._make_hypothesis("h3", "improved", 0.07),
+        ]
+        result = _compute_verdict(hyps)
+        assert result == "2/3 hypotheses improved vs baseline"
+
+    def test_empty_list(self) -> None:
+        """Empty list → '0/0 hypotheses improved vs baseline'."""
+        from research_to_dev.cli.main import _compute_verdict
+
+        result = _compute_verdict([])
+        assert result == "0/0 hypotheses improved vs baseline"
+
+
+# ======================================================================
+# TR-18: _print_report_summary() unit tests
+# ======================================================================
+
+
+class TestPrintReportSummary:
+    """Unit tests for _print_report_summary() terminal executive summary."""
+
+    @staticmethod
+    def _make_compiled_report(
+        hypotheses: list | None = None,
+        insights: object | None = None,
+    ):
+        """Build a CompiledReport for summary testing."""
+        from research_to_dev.report.compilation import CompiledReport
+
+        return CompiledReport(
+            generated_at="2024-01-15T12:00:00+00:00",
+            hypotheses=hypotheses or [],
+            insights=insights,
+        )
+
+    @staticmethod
+    def _make_hypothesis(
+        hyp_id: str,
+        status: str = "improved",
+        best_improvement: float | None = 0.023,
+        title_override: str | None = None,
+    ):
+        """Build a HypothesisSummary with a realistic title."""
+        from research_to_dev.report.compilation import (
+            BaselineComparison,
+            HypothesisSummary,
+        )
+
+        title = title_override or f"Improve {hyp_id} performance via caching"
+        bc = (
+            BaselineComparison(
+                best_improvement=best_improvement,
+                overall_trend=status,
+            )
+            if best_improvement is not None
+            else None
+        )
+
+        return HypothesisSummary(
+            hypothesis_id=hyp_id,
+            status=status,
+            iterations_total=3,
+            iterations_kept=2 if status == "improved" else 0,
+            iterations_discarded=0,
+            iterations_crashed=0,
+            best_metric_value=0.85,
+            baseline_comparison=bc,
+            iterations=[],
+        )
+
+    def test_header_present(self, capsys) -> None:
+        """Output contains 'REPORT SUMMARY' header with box characters."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        compiled = self._make_compiled_report()
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 12.3)
+
+        captured = capsys.readouterr()
+        assert "REPORT SUMMARY" in captured.out
+        assert "═══" in captured.out
+
+    def test_shows_top_5_hypotheses(self, capsys) -> None:
+        """Shows top 5 hypothesis titles, deltas, and statuses."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        hyps = [
+            self._make_hypothesis(f"h{i}", status="improved", best_improvement=0.01 * i)
+            for i in range(1, 7)
+        ]
+        compiled = self._make_compiled_report(hypotheses=hyps)
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 5.0)
+
+        captured = capsys.readouterr()
+        # First 5 should be visible
+        for i in range(1, 6):
+            assert f"h{i}" in captured.out
+        # 6th should NOT be visible
+        assert "h6" not in captured.out
+
+    def test_shows_verdict(self, capsys) -> None:
+        """Output includes verdict string from _compute_verdict()."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        hyps = [
+            self._make_hypothesis("h1", "improved", 0.05),
+            self._make_hypothesis("h2", "worsened", -0.03),
+            self._make_hypothesis("h3", "improved", 0.02),
+        ]
+        compiled = self._make_compiled_report(hypotheses=hyps)
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 3.0)
+
+        captured = capsys.readouterr()
+        assert "Verdict:" in captured.out
+        assert "2/3 hypotheses improved vs baseline" in captured.out
+
+    def test_shows_output_paths(self, capsys) -> None:
+        """Output shows both .md and .json file paths."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        compiled = self._make_compiled_report()
+        md = Path("/tmp/reports/report.md")
+        js = Path("/tmp/reports/report.json")
+        _print_report_summary(compiled, md, js, 7.5)
+
+        captured = capsys.readouterr()
+        assert "report.md" in captured.out
+        assert "report.json" in captured.out
+
+    def test_shows_elapsed_time(self, capsys) -> None:
+        """Output shows elapsed time in seconds."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        compiled = self._make_compiled_report()
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 12.3)
+
+        captured = capsys.readouterr()
+        assert "12.3s" in captured.out
+
+    def test_title_truncation(self, capsys) -> None:
+        """Hypothesis ID longer than 50 chars is truncated with '...'."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        long_id = "A" * 60
+        hyps = [
+            self._make_hypothesis(long_id, "improved", 0.05),
+        ]
+        compiled = self._make_compiled_report(hypotheses=hyps)
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 1.0)
+
+        captured = capsys.readouterr()
+        # Truncated version should appear (47 + '...')
+        truncated = "A" * 47 + "..."
+        assert truncated in captured.out
+        # Full version should NOT appear
+        assert long_id not in captured.out
+
+    def test_with_insights_shows_recommendations(self, capsys) -> None:
+        """When insights present, top 3 recommendations are shown."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+        from research_to_dev.report.insights import InsightsReport, Recommendation
+
+        insights = InsightsReport(
+            recommendations=[
+                Recommendation(
+                    action="Add caching layer",
+                    priority="high",
+                    rationale="Reduces latency",
+                    supporting_evidence=["ref1"],
+                ),
+                Recommendation(
+                    action="Optimize queries",
+                    priority="medium",
+                    rationale="Less I/O",
+                    supporting_evidence=["ref2"],
+                ),
+                Recommendation(
+                    action="Refactor module X",
+                    priority="low",
+                    rationale="Cleaner code",
+                    supporting_evidence=["ref3"],
+                ),
+                Recommendation(
+                    action="Fourth recommendation",
+                    priority="low",
+                    rationale="Not shown",
+                    supporting_evidence=[],
+                ),
+            ]
+        )
+
+        hyps = [self._make_hypothesis("h1", "improved", 0.05)]
+        compiled = self._make_compiled_report(hypotheses=hyps, insights=insights)
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 2.0)
+
+        captured = capsys.readouterr()
+        assert "Top Recommendations:" in captured.out
+        assert "Add caching layer" in captured.out
+        assert "Optimize queries" in captured.out
+        assert "Refactor module X" in captured.out
+        # Fourth should not appear (only top 3)
+        assert "Fourth recommendation" not in captured.out
+
+    def test_without_insights_no_recommendations(self, capsys) -> None:
+        """Without insights, no 'Top Recommendations' section."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        hyps = [self._make_hypothesis("h1", "improved", 0.05)]
+        compiled = self._make_compiled_report(hypotheses=hyps, insights=None)
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 1.0)
+
+        captured = capsys.readouterr()
+        assert "Top Recommendations:" not in captured.out
+
+    def test_shows_delta_as_percentage(self, capsys) -> None:
+        """Delta values are formatted with sign and percentage."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        hyps = [
+            self._make_hypothesis("h1", "improved", 0.023),
+        ]
+        compiled = self._make_compiled_report(hypotheses=hyps)
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 1.0)
+
+        captured = capsys.readouterr()
+        assert "+2.3%" in captured.out
+
+    def test_delta_none_shows_na(self, capsys) -> None:
+        """When best_improvement is None, delta shows 'N/A'."""
+        from pathlib import Path
+        from research_to_dev.cli.main import _print_report_summary
+
+        hyps = [
+            self._make_hypothesis("h1", "crash", None),
+        ]
+        compiled = self._make_compiled_report(hypotheses=hyps)
+        _print_report_summary(compiled, Path("/tmp/test.md"), Path("/tmp/test.json"), 1.0)
+
+        captured = capsys.readouterr()
+        assert "N/A" in captured.out
