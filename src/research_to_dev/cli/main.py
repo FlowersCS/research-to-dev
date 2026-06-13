@@ -494,6 +494,12 @@ def report(
         "--with-insights",
         help="Include LLM-generated insights in the report.",
     ),
+    trace: str = typer.Option(
+        "",
+        "--trace",
+        "-t",
+        help="Path to pipeline trace.json for traceability links.",
+    ),
 ) -> None:
     """Compile experiment results into markdown and JSON reports.
 
@@ -505,11 +511,14 @@ def report(
     to filter to a single one.
     """
     from research_to_dev.report.compilation import (
+        CompiledReport,
         TsvResultsReader,
         compile_all,
         compile_hypothesis,
         write_reports,
     )
+
+    t_start = time.monotonic()
 
     config = ReportConfig(
         hypothesis_filter=hypothesis,
@@ -538,6 +547,22 @@ def report(
 
     experiments_dir = Path(config.experiments_dir)
     reports_dir = Path(config.reports_dir)
+
+    # -- 0. Traceability wiring (TR-16) -----------------------------------
+    trace_path = trace or ".research-to-dev/pipeline/trace.json"
+    traceability_ctx = None
+    if trace_path:
+        try:
+            from research_to_dev.report.traceability import JsonTraceReader
+
+            reader_trace = JsonTraceReader(trace_path)
+            traceability_ctx = reader_trace.read()
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            typer.echo(
+                f"Warning: Could not read trace at {trace_path}: {exc}. "
+                f"Report compiled without traceability.",
+                err=True,
+            )
 
     # -- 1. Validate experiments directory --------------------------------
     if not experiments_dir.exists() or not experiments_dir.is_dir():
@@ -595,7 +620,6 @@ def report(
             config.hypothesis_filter, iterations, direction
         )
         from datetime import datetime, timezone
-        from research_to_dev.report.compilation import CompiledReport
 
         compiled = CompiledReport(
             generated_at=datetime.now(timezone.utc).isoformat(),
@@ -607,6 +631,7 @@ def report(
             reader,
             experiments_dir,
             insights_generator=insights_generator,
+            traceability=traceability_ctx,
         )
 
         if not compiled.hypotheses:
@@ -630,6 +655,10 @@ def report(
 
     typer.echo(f"Report written to {md_path}")
     typer.echo(f"Report written to {json_path}")
+
+    # -- 6. Terminal executive summary (TR-19) ----------------------------
+    elapsed = time.monotonic() - t_start
+    _print_report_summary(compiled, md_path, json_path, elapsed)
 
 
 # ======================================================================
@@ -802,5 +831,90 @@ def _print_summary(
             typer.echo(f"   - {_truncate(w, 80)}")
         if n_warnings > 3:
             typer.echo(f"   ... and {n_warnings - 3} more")
+    typer.echo(f" Time:     {elapsed:.1f}s")
+    typer.echo("═══════════════════════════════════════")
+
+
+# ======================================================================
+# Report command helpers
+# ======================================================================
+
+
+def _compute_verdict(hypotheses: list) -> str:
+    """Count improved vs declined vs neutral hypotheses.
+
+    Returns a verdict string like ``"3/5 hypotheses improved vs baseline"``.
+
+    Rules (rule-based, no direction needed — status already encodes it):
+    - improved: HypothesisSummary.status == "improved"
+    - declined: HypothesisSummary.status == "worsened"
+    - neutral: status is "crash" or "no_iterations"
+    """
+    improved = 0
+    total = len(hypotheses)
+    for h in hypotheses:
+        if h.status == "improved":
+            improved += 1
+    return f"{improved}/{total} hypotheses improved vs baseline"
+
+
+def _print_report_summary(
+    compiled,  # CompiledReport
+    md_path: Path,
+    json_path: Path,
+    elapsed: float,
+) -> None:
+    """Print a human-readable executive summary after report compilation.
+
+    Shows: top 5 hypotheses (title truncated, delta, status),
+    top 3 recommendations (if insights available), overall verdict,
+    output file paths, and elapsed time.
+
+    Follows the same box-drawing pattern as ``_print_summary()`` for
+    the ``analyze`` command. Does NOT include traceability data.
+    """
+    typer.echo()
+    typer.echo("═══════════════════════════════════════")
+    typer.echo(" REPORT SUMMARY")
+    typer.echo("═══════════════════════════════════════")
+
+    # -- Top hypotheses ---------------------------------------------------
+    typer.echo()
+    typer.echo(" Top Hypotheses:")
+    typer.echo(f" {'#':>2}  {'Delta':>8}   {'Title':<50} {'Status':>8}")
+
+    for i, h in enumerate(compiled.hypotheses[:5], 1):
+        # Delta: format as signed percentage or "N/A"
+        bc = h.baseline_comparison
+        if bc is not None and bc.best_improvement is not None:
+            delta_str = f"{bc.best_improvement:+.1%}"
+        else:
+            delta_str = "N/A"
+
+        # Title: use hypothesis_id (same convention as markdown formatter)
+        title_trunc = _truncate(h.hypothesis_id, 50)
+
+        # Status
+        status_str = h.status
+
+        typer.echo(
+            f" {i:>2}  {delta_str:>8}   {title_trunc:<50} {status_str:>8}"
+        )
+
+    # -- Top recommendations (if insights) --------------------------------
+    if compiled.insights is not None and compiled.insights.recommendations:
+        typer.echo()
+        typer.echo(" Top Recommendations:")
+        for j, rec in enumerate(compiled.insights.recommendations[:3], 1):
+            action_trunc = _truncate(rec.action, 55)
+            typer.echo(f"  {j}. {action_trunc}")
+
+    # -- Verdict, output, time -------------------------------------------
+    verdict = _compute_verdict(compiled.hypotheses)
+
+    typer.echo()
+    typer.echo(f" Verdict: {verdict}")
+    typer.echo(f" Output:   {md_path}")
+    typer.echo(f" Output:   {json_path}")
     typer.echo(f" Time:     {elapsed:.1f}s")
     typer.echo("═══════════════════════════════════════")

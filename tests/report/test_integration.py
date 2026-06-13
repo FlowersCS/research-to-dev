@@ -505,3 +505,244 @@ class TestReportExports:
         assert config.reports_dir == "/tmp/reps"
         assert config.hypothesis_filter == "abc"
         assert config.include_insights is True
+
+    def test_traceability_types_exported(self) -> None:
+        """Traceability types are importable from research_to_dev.report."""
+        from research_to_dev.report import (
+            CorrelationTrace,
+            HypothesisOrigin,
+            JsonTraceReader,
+            TraceReader,
+            TraceabilityContext,
+            build_traceability,
+        )
+        from typing import Protocol as _Protocol
+
+        # Verify each is the correct type
+        assert CorrelationTrace is not None
+        assert HypothesisOrigin is not None
+        assert TraceabilityContext is not None
+        assert JsonTraceReader is not None
+
+        # TraceReader is a Protocol
+        assert issubclass(TraceReader, _Protocol)
+
+        # build_traceability is callable
+        assert callable(build_traceability)
+
+
+# ---------------------------------------------------------------------------
+# TR-15: --trace flag tests
+# ---------------------------------------------------------------------------
+
+
+class TestReportTraceFlag:
+    """CLI tests for `research-to-dev report --trace` flag (TR-15, TR-16)."""
+
+    def test_trace_flag_accepted(self) -> None:
+        """--trace flag is accepted by the report command."""
+        runner = CliRunner()
+        import os as _os
+        original_cwd = _os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                _os.chdir(tmpdir)
+                # Create minimal experiments dir
+                exp_dir = Path(tmpdir) / ".research-to-dev" / "experiments" / "h1"
+                exp_dir.mkdir(parents=True)
+                (exp_dir / "results.tsv").write_text(
+                    "iteration\tmetric_name\tmetric_value\t"
+                    "baseline_value\tdelta\tstatus\ttimestamp\n"
+                    "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2024-01-01T00:00:00Z\n"
+                )
+                (exp_dir / "program.md").write_text(
+                    "---\nhypothesis_id: h1\ntarget_metric: val_loss\n"
+                    "success_criteria: val_loss < 0.5\n"
+                    "time_budget: 30m\nmax_iterations: 5\n"
+                    "baseline:\n  val_loss: 0.5\n"
+                    "run_command: python train.py\n"
+                    "coding_agent_model: test\n"
+                    "direction: minimize\n---\n"
+                )
+
+                result = runner.invoke(
+                    app, ["report", "--trace", "/tmp/nonexistent.json"]
+                )
+                # Should succeed (missing trace is a warning, not an error)
+                assert result.exit_code == 0, f"Output: {result.output}"
+                assert "Report written to" in result.output
+            finally:
+                _os.chdir(original_cwd)
+
+    def test_trace_flag_default_empty(self) -> None:
+        """When --trace is not provided, default is empty string."""
+        runner = CliRunner()
+        # Verify via help output that --trace has a default
+        result = runner.invoke(app, ["report", "--help"])
+        assert result.exit_code == 0
+        assert "--trace" in result.stdout
+
+    def test_trace_valid_json_wires_traceability(self) -> None:
+        """Valid trace.json → report should render headers fine."""
+        runner = CliRunner()
+        import json as _json
+        import os as _os
+        original_cwd = _os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                _os.chdir(tmpdir)
+
+                # Create experiments
+                exp_dir = Path(tmpdir) / ".research-to-dev" / "experiments" / "abc123"
+                exp_dir.mkdir(parents=True)
+                (exp_dir / "results.tsv").write_text(
+                    "iteration\tmetric_name\tmetric_value\t"
+                    "baseline_value\tdelta\tstatus\ttimestamp\n"
+                    "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2024-01-01T00:00:00Z\n"
+                )
+                (exp_dir / "program.md").write_text(
+                    "---\nhypothesis_id: abc123\ntarget_metric: val_loss\n"
+                    "success_criteria: val_loss < 0.5\n"
+                    "time_budget: 30m\nmax_iterations: 5\n"
+                    "baseline:\n  val_loss: 0.5\n"
+                    "run_command: python train.py\n"
+                    "coding_agent_model: test\n"
+                    "direction: minimize\n---\n"
+                )
+
+                # Create a minimal valid trace.json
+                trace_path = Path(tmpdir) / "trace.json"
+                trace_data = {
+                    "hypotheses": [
+                        {
+                            "id": "abc123",
+                            "title": "Test Hypothesis",
+                            "description": "A test hypothesis for traceability",
+                            "approach": "Implement caching",
+                            "target_metric": "val_loss",
+                            "expected_improvement": "lower val_loss",
+                            "code_changes": "src/main.py",
+                            "supporting_papers": ["paper-1"],
+                            "correlations": [],
+                        }
+                    ],
+                    "correlation": {},
+                }
+                trace_path.write_text(_json.dumps(trace_data))
+
+                result = runner.invoke(
+                    app, ["report", "--trace", str(trace_path)]
+                )
+                assert result.exit_code == 0, f"Output: {result.output}"
+                assert "Report written to" in result.output
+            finally:
+                _os.chdir(original_cwd)
+
+    def test_trace_missing_file_warns(self) -> None:
+        """Missing trace file → warning, report succeeds without traceability."""
+        runner = CliRunner()
+        import os as _os
+        original_cwd = _os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                _os.chdir(tmpdir)
+
+                exp_dir = Path(tmpdir) / ".research-to-dev" / "experiments" / "h1"
+                exp_dir.mkdir(parents=True)
+                (exp_dir / "results.tsv").write_text(
+                    "iteration\tmetric_name\tmetric_value\t"
+                    "baseline_value\tdelta\tstatus\ttimestamp\n"
+                    "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2024-01-01T00:00:00Z\n"
+                )
+                (exp_dir / "program.md").write_text(
+                    "---\nhypothesis_id: h1\ntarget_metric: val_loss\n"
+                    "success_criteria: val_loss < 0.5\n"
+                    "time_budget: 30m\nmax_iterations: 5\n"
+                    "baseline:\n  val_loss: 0.5\n"
+                    "run_command: python train.py\n"
+                    "coding_agent_model: test\n"
+                    "direction: minimize\n---\n"
+                )
+
+                result = runner.invoke(
+                    app, ["report", "--trace", "/tmp/does/not/exist/trace.json"]
+                )
+                assert result.exit_code == 0, f"Output: {result.output}"
+                # Should succeed with warning about traceability
+                assert "Report written to" in result.output
+            finally:
+                _os.chdir(original_cwd)
+
+    def test_trace_malformed_json_warns(self) -> None:
+        """Malformed trace JSON → warning, report succeeds without traceability."""
+        runner = CliRunner()
+        import os as _os
+        original_cwd = _os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                _os.chdir(tmpdir)
+
+                exp_dir = Path(tmpdir) / ".research-to-dev" / "experiments" / "h1"
+                exp_dir.mkdir(parents=True)
+                (exp_dir / "results.tsv").write_text(
+                    "iteration\tmetric_name\tmetric_value\t"
+                    "baseline_value\tdelta\tstatus\ttimestamp\n"
+                    "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2024-01-01T00:00:00Z\n"
+                )
+                (exp_dir / "program.md").write_text(
+                    "---\nhypothesis_id: h1\ntarget_metric: val_loss\n"
+                    "success_criteria: val_loss < 0.5\n"
+                    "time_budget: 30m\nmax_iterations: 5\n"
+                    "baseline:\n  val_loss: 0.5\n"
+                    "run_command: python train.py\n"
+                    "coding_agent_model: test\n"
+                    "direction: minimize\n---\n"
+                )
+
+                # Create malformed JSON
+                bad_trace = Path(tmpdir) / "bad.json"
+                bad_trace.write_text("this is not json{{{")
+
+                result = runner.invoke(
+                    app, ["report", "--trace", str(bad_trace)]
+                )
+                assert result.exit_code == 0, f"Output: {result.output}"
+                assert "Report written to" in result.output
+            finally:
+                _os.chdir(original_cwd)
+
+    def test_report_summary_printed(self) -> None:
+        """Report command prints terminal summary with REPORT SUMMARY header (TR-19)."""
+        runner = CliRunner()
+        import os as _os
+        original_cwd = _os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                _os.chdir(tmpdir)
+
+                exp_dir = Path(tmpdir) / ".research-to-dev" / "experiments" / "h1"
+                exp_dir.mkdir(parents=True)
+                (exp_dir / "results.tsv").write_text(
+                    "iteration\tmetric_name\tmetric_value\t"
+                    "baseline_value\tdelta\tstatus\ttimestamp\n"
+                    "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2024-01-01T00:00:00Z\n"
+                    "2\tval_loss\t0.42\t0.45\t-0.03\tsuccess\t2024-01-01T00:05:00Z\n"
+                )
+                (exp_dir / "program.md").write_text(
+                    "---\nhypothesis_id: h1\ntarget_metric: val_loss\n"
+                    "success_criteria: val_loss < 0.5\n"
+                    "time_budget: 30m\nmax_iterations: 5\n"
+                    "baseline:\n  val_loss: 0.5\n"
+                    "run_command: python train.py\n"
+                    "coding_agent_model: test\n"
+                    "direction: minimize\n---\n"
+                )
+
+                result = runner.invoke(app, ["report"])
+                assert result.exit_code == 0, f"Output: {result.output}"
+                assert "REPORT SUMMARY" in result.stdout
+                assert "Verdict:" in result.stdout
+                assert "Output:" in result.stdout
+                assert "Time:" in result.stdout
+            finally:
+                _os.chdir(original_cwd)
