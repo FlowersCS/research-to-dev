@@ -87,10 +87,10 @@ def analyze(
         help="Path to the codebase directory (default: current directory).",
     ),
     output: str = typer.Option(
-        "results.json",
+        ".research-to-dev/results.json",
         "--output",
         "-o",
-        help="JSON output file path (default: results.json).",
+        help="JSON output file path (default: .research-to-dev/results.json).",
     ),
 ) -> None:
     """Run the full research-to-code pipeline.
@@ -127,7 +127,7 @@ def analyze(
     client = AsyncOpenAI(api_key=api_key)
     orchestrator = PipelineOrchestrator(client, on_step=_on_step)
 
-    typer.echo(f"\n  Query:     \"{query}\"")
+    typer.echo(f'\n  Query:     "{query}"')
     typer.echo(f"  Codebase:  {codebase_path}")
     typer.echo(f"  Output:    {output}\n")
 
@@ -207,13 +207,15 @@ def config_init(
     # Add built-in metrics as commented examples
     configs = registry.to_configs()
     for mc in configs:
-        lines.append(f"  # {mc.name}: \"{mc.pattern}\"  # built-in default")
+        lines.append(f'  # {mc.name}: "{mc.pattern}"  # built-in default')
 
-    lines.extend([
-        "",
-        "  # Custom metric examples (uncomment and modify):",
-        "  # custom_auc: \"auc[:\\s=]*([\\d.]+)\"",
-    ])
+    lines.extend(
+        [
+            "",
+            "  # Custom metric examples (uncomment and modify):",
+            '  # custom_auc: "auc[:\\s=]*([\\d.]+)"',
+        ]
+    )
 
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -267,7 +269,7 @@ def experiment_setup(
         None,
         "--direction",
         help="Explicit direction override: 'maximize' or 'minimize'. "
-             "If not set, inferred from success_criteria.",
+        "If not set, inferred from success_criteria.",
     ),
     trace: str = typer.Option(
         ".research-to-dev/pipeline/trace.json",
@@ -292,8 +294,7 @@ def experiment_setup(
         pipeline_trace = read_trace(trace)
     except FileNotFoundError:
         typer.echo(
-            f"Error: Trace not found at {trace}. "
-            f"Run `research-to-dev analyze` first.",
+            f"Error: Trace not found at {trace}. Run `research-to-dev analyze` first.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -301,8 +302,7 @@ def experiment_setup(
     hypotheses = extract_hypotheses(pipeline_trace)
     if not hypotheses:
         typer.echo(
-            "Error: No hypotheses found in trace. "
-            "Run `research-to-dev analyze` first.",
+            "Error: No hypotheses found in trace. Run `research-to-dev analyze` first.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -322,7 +322,9 @@ def experiment_setup(
         raise typer.Exit(code=1)
 
     # -- 2. Validate target metric --------------------------------------
-    metrics = MetricRegistry(config_path=config_path if Path(config_path).exists() else None)
+    metrics = MetricRegistry(
+        config_path=config_path if Path(config_path).exists() else None
+    )
     target_metric = target.target_metric
 
     if not metrics.validate_metric(target_metric):
@@ -362,8 +364,7 @@ def experiment_setup(
         baseline_dict: dict[str, float] = {key: float(val_str)}
     except ValueError:
         typer.echo(
-            f"Error: baseline value must be numeric (e.g. '0.72'), "
-            f"got '{val_str}'.",
+            f"Error: baseline value must be numeric (e.g. '0.72'), got '{val_str}'.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -446,9 +447,7 @@ def experiment_run(
     git_ops = GitOperations(repo_path=".")
     adapter = OpenCodeAdapter()
     executor = CodeExecutor(cwd=".")
-    results_path = Path(
-        f".research-to-dev/experiments/{hypothesis_id}/results.tsv"
-    )
+    results_path = Path(f".research-to-dev/experiments/{hypothesis_id}/results.tsv")
     writer = ResultsWriter(tsv_path=results_path)
 
     runner_obj = ExperimentRunner(
@@ -532,8 +531,7 @@ def report(
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             typer.echo(
-                "Warning: OPENAI_API_KEY not set. "
-                "Insights generation skipped.",
+                "Warning: OPENAI_API_KEY not set. Insights generation skipped.",
                 err=True,
             )
         else:
@@ -616,9 +614,7 @@ def report(
             except (ValueError, FileNotFoundError):
                 pass
 
-        summary = compile_hypothesis(
-            config.hypothesis_filter, iterations, direction
-        )
+        summary = compile_hypothesis(config.hypothesis_filter, iterations, direction)
         from datetime import datetime, timezone
 
         compiled = CompiledReport(
@@ -645,8 +641,7 @@ def report(
     # -- 4. Insights failure check (when generation was attempted) --------
     if insights_generator is not None and compiled.insights is None:
         typer.echo(
-            "Warning: Insights generation failed. "
-            "Report compiled without insights.",
+            "Warning: Insights generation failed. Report compiled without insights.",
             err=True,
         )
 
@@ -671,9 +666,7 @@ def _truncate(text: str, max_len: int = 50) -> str:
     return text if len(text) <= max_len else text[: max_len - 3] + "..."
 
 
-def _print_run_summary(
-    results_path: Path, program_spec: object
-) -> None:
+def _print_run_summary(results_path: Path, program_spec: object) -> None:
     """Print a completion summary after the experiment loop finishes (AE-26).
 
     Reads the results TSV to compute iterations run, keeps/discards, and
@@ -689,7 +682,9 @@ def _print_run_summary(
 
     # ----- read TSV rows ------------------------------------------------
     if not results_path.exists():
-        typer.echo("\nExperiment completed. No iterations ran (results file not found).")
+        typer.echo(
+            "\nExperiment completed. No iterations ran (results file not found)."
+        )
         return
 
     raw = results_path.read_text(encoding="utf-8")
@@ -705,14 +700,16 @@ def _print_run_summary(
     for line in lines[1:]:
         parts = line.split("\t")
         if len(parts) >= 6:
-            rows.append({
-                "iteration": int(parts[0]),
-                "metric_name": parts[1],
-                "metric_value": float(parts[2]),
-                "baseline_value": float(parts[3]),
-                "delta": float(parts[4]),
-                "status": parts[5],
-            })
+            rows.append(
+                {
+                    "iteration": int(parts[0]),
+                    "metric_name": parts[1],
+                    "metric_value": float(parts[2]),
+                    "baseline_value": float(parts[3]),
+                    "delta": float(parts[4]),
+                    "status": parts[5],
+                }
+            )
 
     if not rows:
         typer.echo("\nExperiment completed. No data rows in results file.")
@@ -775,9 +772,7 @@ def _print_run_summary(
     typer.echo("═══════════════════════════════════════")
 
 
-def _print_summary(
-    trace: PipelineTrace, output_path: str, elapsed: float
-) -> None:
+def _print_summary(trace: PipelineTrace, output_path: str, elapsed: float) -> None:
     """Print a human-readable summary after pipeline completion."""
 
     typer.echo()
@@ -788,18 +783,15 @@ def _print_summary(
     # Per-step counts
     retrieval_count = len(trace.retrieval.results) if trace.retrieval else 0
     ranking_count = len(trace.ranking.papers) if trace.ranking else 0
-    codebase_modules = (
-        len(trace.codebase.modules) if trace.codebase else 0
-    )
+    codebase_modules = len(trace.codebase.modules) if trace.codebase else 0
     correlations_count = 0
     if trace.correlation:
-        correlations_count = (
-            len(trace.correlation.correlations)
-            + len(trace.correlation.module_correlations)
+        correlations_count = len(trace.correlation.correlations) + len(
+            trace.correlation.module_correlations
         )
 
     typer.echo(
-        f"Query: \"{trace.query}\" | "
+        f'Query: "{trace.query}" | '
         f"Papers: {retrieval_count} ranked | "
         f"Codebase: {codebase_modules} modules | "
         f"Correlations: {correlations_count}"
@@ -897,9 +889,7 @@ def _print_report_summary(
         # Status
         status_str = h.status
 
-        typer.echo(
-            f" {i:>2}  {delta_str:>8}   {title_trunc:<50} {status_str:>8}"
-        )
+        typer.echo(f" {i:>2}  {delta_str:>8}   {title_trunc:<50} {status_str:>8}")
 
     # -- Top recommendations (if insights) --------------------------------
     if compiled.insights is not None and compiled.insights.recommendations:
