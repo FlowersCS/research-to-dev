@@ -746,3 +746,60 @@ class TestReportTraceFlag:
                 assert "Time:" in result.stdout
             finally:
                 _os.chdir(original_cwd)
+
+    def test_report_without_trace_produces_no_traceability(self) -> None:
+        """Report without --trace MUST NOT include traceability in markdown output.
+
+        Per TR-24: backward compatibility — report files should not contain
+        traceability sections or appendix when --trace is not used.
+        """
+        runner = CliRunner()
+        import os as _os
+        original_cwd = _os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                _os.chdir(tmpdir)
+
+                exp_dir = Path(tmpdir) / ".research-to-dev" / "experiments" / "h1"
+                exp_dir.mkdir(parents=True)
+                (exp_dir / "results.tsv").write_text(
+                    "iteration\tmetric_name\tmetric_value\t"
+                    "baseline_value\tdelta\tstatus\ttimestamp\n"
+                    "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2024-01-01T00:00:00Z\n"
+                    "2\tval_loss\t0.42\t0.45\t-0.03\tsuccess\t2024-01-01T00:05:00Z\n"
+                )
+                (exp_dir / "program.md").write_text(
+                    "---\nhypothesis_id: h1\ntarget_metric: val_loss\n"
+                    "success_criteria: val_loss < 0.5\n"
+                    "time_budget: 30m\nmax_iterations: 5\n"
+                    "baseline:\n  val_loss: 0.5\n"
+                    "run_command: python train.py\n"
+                    "coding_agent_model: test\n"
+                    "direction: minimize\n---\n"
+                )
+
+                # Run report WITHOUT --trace
+                result = runner.invoke(app, ["report"])
+                assert result.exit_code == 0, f"Output: {result.output}"
+                assert "Report written to" in result.output
+
+                # Verify markdown file does NOT contain traceability sections
+                reports_dir = Path(tmpdir) / ".research-to-dev" / "reports"
+                md_files = list(reports_dir.glob("*.md"))
+                assert len(md_files) == 1, "Expected exactly one .md report file"
+                md_content = md_files[0].read_text(encoding="utf-8")
+
+                assert "### Traceability" not in md_content, (
+                    "Traceability subsection should not appear when "
+                    "--trace is not used"
+                )
+                assert "## Traceability Appendix" not in md_content, (
+                    "Traceability appendix should not appear when "
+                    "--trace is not used"
+                )
+                # Still has anchors (always present)
+                assert '<a id="hyp-' in md_content, (
+                    "Hypothesis anchors should always be present"
+                )
+            finally:
+                _os.chdir(original_cwd)
