@@ -192,6 +192,10 @@ class ReportConfig:
     insights_model: str = "gpt-4o-mini"
     """OpenAI chat model used for cross-hypothesis insights generation."""
 
+    trace_path: str = ""
+    """Path to pipeline trace.json for traceability links.
+    Empty string means no traceability (D6)."""
+
 
 @dataclass
 class CodebaseConfig:

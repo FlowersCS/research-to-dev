@@ -7,10 +7,13 @@ SHA-256 ID from the pipeline output.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from research_to_dev.cli.orchestrator import PipelineTrace
 from research_to_dev.hypothesis.types import Hypothesis
+
+logger = logging.getLogger(__name__)
 
 
 def read_trace(path: str) -> PipelineTrace:
@@ -93,3 +96,51 @@ def _reconstruct_trace(data: dict) -> PipelineTrace:
         timestamp=data.get("timestamp", ""),
         hypotheses=data.get("hypotheses", []),
     )
+
+
+# ------------------------------------------------------------------
+# Trace data extraction for traceability (TR-07)
+# ------------------------------------------------------------------
+
+
+def read_trace_with_correlations(path: str) -> tuple[list[dict], dict | None]:
+    """Read trace.json and extract hypothesis + correlation raw data.
+
+    Returns raw dict data for downstream traceability construction.
+    Gracefully handles missing files and malformed JSON.
+
+    Args:
+        path: Filesystem path to trace.json.
+
+    Returns:
+        Tuple of ``(hypothesis_dicts, correlation_dict)``.
+        - ``hypothesis_dicts``: list of raw hypothesis dicts (may be empty).
+        - ``correlation_dict``: raw correlation entries dict, or None if
+          unavailable.
+    """
+    file_path = Path(path)
+    if not file_path.exists():
+        logger.warning("Trace file not found at %s — no traceability data.", path)
+        return ([], None)
+
+    try:
+        data = json.loads(file_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning(
+            "Failed to parse trace.json at %s: %s — no traceability data.",
+            path, exc,
+        )
+        return ([], None)
+
+    # Extract hypotheses from the expected pipeline structure
+    # trace.json has top-level "hypotheses" key
+    hypothesis_dicts: list[dict] = data.get("hypotheses", [])
+    if not isinstance(hypothesis_dicts, list):
+        hypothesis_dicts = []
+
+    # Extract correlation data
+    correlation_dict: dict | None = data.get("correlation")
+    if not isinstance(correlation_dict, dict):
+        correlation_dict = None
+
+    return (hypothesis_dicts, correlation_dict)
