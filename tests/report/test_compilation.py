@@ -25,6 +25,12 @@ from research_to_dev.report.insights import (
     ProgramContext,
     Recommendation,
 )
+from research_to_dev.report.traceability import (
+    CorrelationTrace,
+    HypothesisOrigin,
+    TraceabilityContext,
+    build_traceability,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -683,3 +689,163 @@ class TestCompileAllWithInsights:
             # But NO ProgramContext is collected (malformed → skipped)
             assert mock_gen.last_contexts is not None
             assert len(mock_gen.last_contexts) == 0
+
+
+# ---------------------------------------------------------------------------
+# TR-09: CompiledReport.traceability field
+# ---------------------------------------------------------------------------
+
+
+def _make_traceability_context() -> TraceabilityContext:
+    """Build a minimal TraceabilityContext for testing."""
+    return TraceabilityContext(
+        hypothesis_origins={
+            "hyp-abc": HypothesisOrigin(
+                hypothesis_id="hyp-abc",
+                title="Test Hypothesis",
+                description="A test hypothesis for traceability.",
+                code_changes="Add a test function.",
+                supporting_papers=["paper-1"],
+                resolved_correlations=[
+                    CorrelationTrace(
+                        correlation_id="abcd1234abcd",
+                        paper_title="Test Paper",
+                        claim_text="This technique improves accuracy.",
+                        claim_section="methods",
+                        claim_paper_id="paper-1",
+                        component_name="test_component",
+                        component_file_path="/src/test.py",
+                        component_module_name="research_to_dev.test",
+                        component_signature="def test_fn() -> None",
+                        correlation_type="direct_solution",
+                        reasoning="Directly applies the technique.",
+                        target_type="component",
+                    ),
+                ],
+                unresolved_correlation_ids=[],
+            ),
+        },
+        claim_anchors={
+            "claim-abcd1234": "This technique improves accuracy.",
+        },
+        component_anchors={
+            "comp-research_to_dev-test-abcd1234": (
+                "/src/test.py",
+                "research_to_dev.test",
+                "def test_fn() -> None",
+            ),
+        },
+    )
+
+
+class TestCompiledReportTraceability:
+    """TR-09: CompiledReport with traceability field."""
+
+    def test_compiled_report_without_traceability_defaults_to_none(self) -> None:
+        """Constructing without traceability → field is None."""
+        report = CompiledReport(
+            generated_at="2026-06-07T14:30:00Z",
+            hypotheses=[],
+        )
+        assert report.traceability is None
+
+    def test_compiled_report_with_traceability(self) -> None:
+        """Constructing with traceability → field holds the context."""
+        ctx = _make_traceability_context()
+        report = CompiledReport(
+            generated_at="2026-06-07T14:30:00Z",
+            hypotheses=[],
+            traceability=ctx,
+        )
+        assert report.traceability is ctx
+        assert report.traceability.hypothesis_origins["hyp-abc"].title == "Test Hypothesis"
+
+    def test_compiled_report_positional_and_keyword(self) -> None:
+        """Existing construction patterns still work; traceability is
+        keyword-only and defaults to None."""
+        # Positional args (generated_at) + keyword hypotheses
+        report = CompiledReport(
+            generated_at="2026-01-01T00:00:00Z",
+            hypotheses=[],
+        )
+        assert report.traceability is None
+        assert report.insights is None
+
+
+# ---------------------------------------------------------------------------
+# TR-10: compile_all with traceability parameter
+# ---------------------------------------------------------------------------
+
+
+class TestCompileAllWithTraceability:
+    """TR-10: compile_all accepts traceability parameter."""
+
+    def test_compile_all_with_traceability_attaches_context(self) -> None:
+        """When traceability is provided, it is attached to the
+        CompiledReport."""
+        ctx = _make_traceability_context()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+            h1_dir = exp_dir / "hyp-abc"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(reader, exp_dir, traceability=ctx)
+
+            assert report.traceability is ctx
+            assert len(report.hypotheses) == 1
+
+    def test_compile_all_without_traceability_is_noop(self) -> None:
+        """When traceability is not provided, CompiledReport.traceability is
+        None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+            h1_dir = exp_dir / "h1"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(reader, exp_dir)
+
+            assert report.traceability is None
+            assert len(report.hypotheses) == 1
+
+    def test_compile_all_traceability_roundtrip(self) -> None:
+        """TraceabilityContext survives compile_all round-trip intact."""
+        ctx = _make_traceability_context()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exp_dir = Path(tmpdir)
+            h1_dir = exp_dir / "hyp-abc"
+            h1_dir.mkdir()
+            (h1_dir / "results.tsv").write_text(
+                "iteration\tmetric_name\tmetric_value\tbaseline_value\t"
+                "delta\tstatus\ttimestamp\n"
+                "1\tval_loss\t0.45\t0.50\t-0.05\tsuccess\t2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            _write_program_md(h1_dir, "minimize")
+
+            reader = TsvResultsReader(exp_dir)
+            report = compile_all(reader, exp_dir, traceability=ctx)
+
+            # Verify traceability data survived the round-trip
+            assert report.traceability is not None
+            origin = report.traceability.hypothesis_origins["hyp-abc"]
+            assert origin.title == "Test Hypothesis"
+            assert len(origin.resolved_correlations) == 1
+            assert origin.resolved_correlations[0].claim_text == (
+                "This technique improves accuracy."
+            )
